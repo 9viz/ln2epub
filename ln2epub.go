@@ -371,7 +371,9 @@ func SoafpisAd(value string) bool {
 }
 
 func SoafpisEnd(value string) bool {
-	return HtmlValueContains("wp-block-buttons", value)
+	return HtmlValueContains("wp-block-buttons", value) ||
+		HtmlValueContains("sd-like", value) ||
+		HtmlValueContains("daddy", value)
 }
 
 func SoafpisImg(value string) bool {
@@ -421,9 +423,8 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 
 		if c.Pointer.Data == "div" && SoafpisImg(c.Attrs()["class"]) {
 			imgCounter += 1
-			imgLink := c.Find("a").Attrs()["href"]
 			imgAttrs := c.Find("img").Attrs()
-			img, mimetype := FetchImage(imgLink)
+			img, mimetype := FetchImage(imgAttrs["src"])
 			imgId := fmt.Sprintf("Ch%d_img%d", n, imgCounter)
 			imgFileName := "Images/" + imgId
 
