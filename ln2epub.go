@@ -371,7 +371,7 @@ func SoafpisAd(value string) bool {
 }
 
 func SoafpisEnd(value string) bool {
-	return HtmlValueContains("wp-block-separator", value)
+	return HtmlValueContains("wp-block-buttons", value)
 }
 
 func SoafpisImg(value string) bool {
@@ -415,7 +415,7 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 			continue
 		}
 
-		if c.Pointer.Data == "hr" && SoafpisEnd(c.Attrs()["class"]) {
+		if c.Pointer.Data == "div" && SoafpisEnd(c.Attrs()["class"]) {
 			break
 		}
 
