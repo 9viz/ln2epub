@@ -450,11 +450,11 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 
 		ht := c.HTML()
 
-		if sps := c.FindAll("span", "class", "has-inline-color"); sps != nil {
-			for _, sp := range sps {
-				ht = strings.ReplaceAll(ht, sp.HTML(), "")
-			}
-		}
+		// if sps := c.FindAll("span", "class", "has-inline-color"); sps != nil {
+		// 	for _, sp := range sps {
+		// 		ht = strings.ReplaceAll(ht, sp.HTML(), "")
+		// 	}
+		// }
 
 		ret.WriteString(ht)
 	}
