@@ -33,9 +33,7 @@ import (
 // what needs to be done.
 
 type EpubFile struct {
-	// Title is the title of the chapter if it is a xhtml
-	// otherwise, it is used as the `id' attribute in the item
-	// entries.
+	// Title is the title of the chapter if it is a xhtml file.
 	Title string
 
 	// Content is the content of the file.
@@ -46,6 +44,9 @@ type EpubFile struct {
 
 	// Mimetype of the file.
 	Mimetype string
+
+	// `Id' attribute of the file.
+	Id string
 }
 
 func EpubstripOebpsPrefix(filename string) string {
@@ -85,32 +86,28 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 
 	// Manifest section.
 	content.WriteString("<manifest>")
-	n := 1
 	for _, i := range files {
-		if i.Mimetype == "application/xhtml+xml" {
-			content.WriteString("\n<item id='Chapter")
-			content.WriteString(strconv.Itoa(n))
-			content.WriteString("' href='")
-			content.WriteString(EpubstripOebpsPrefix(i.Filename))
-			content.WriteString("' media-type='application/xhtml+xml'/>")
-			n += 1
-		} else {
-			content.WriteString("\n<item id='")
-			content.WriteString(i.Title)
-			content.WriteString("' href='")
-			content.WriteString(EpubstripOebpsPrefix(i.Filename))
-			content.WriteString("' media-type='")
-			content.WriteString(i.Mimetype)
-			content.WriteString("' />")
+		if i.Mimetype != "application/xhtml+xml" {
+			continue
 		}
+		content.WriteString("\n<item id='")
+		content.WriteString(i.Id)
+		content.WriteString("' href='")
+		content.WriteString(EpubstripOebpsPrefix(i.Filename))
+		content.WriteString("' media-type='")
+		content.WriteString(i.Mimetype)
+		content.WriteString("' />")
 	}
 	content.WriteString("\n<item id='ncx' href='toc.ncx' media-type='application/x-dtbncx+xml'/>\n</manifest>\n")
 
 	// Spine section.
 	content.WriteString("\n<spine toc='ncx'>")
-	for i := 1; i <= n; i++ {
-		content.WriteString("\n<itemref idref='Chapter")
-		content.WriteString(strconv.Itoa(i))
+	for _, i := range files {
+		if i.Mimetype != "application/xhtml+xml" {
+			continue
+		}
+		content.WriteString("\n<itemref idref='")
+		content.WriteString(i.Id)
 		content.WriteString("'/>")
 	}
 	content.WriteString("\n</spine>\n")
@@ -156,8 +153,8 @@ func EpubTocNcx(author, identifer, title string, files []EpubFile) []byte {
 		if i.Mimetype != "application/xhtml+xml" {
 			continue
 		}
-		content.WriteString("\n<navPoint id='Chapter")
-		content.WriteString(strconv.Itoa(n))
+		content.WriteString("\n<navPoint id='")
+		content.WriteString(i.Id)
 		content.WriteString("' playOrder='")
 		content.WriteString(strconv.Itoa(n))
 		content.WriteString("'>\n")
@@ -440,7 +437,7 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 
 			extra = append(extra,
 				EpubFile{
-					Title:    imgId,
+					Id:       imgId,
 					Content:  img,
 					Filename: "OEBPS/" + imgFileName,
 					Mimetype: mimetype,
@@ -477,6 +474,7 @@ func SoafpEpubFiles(url string) []EpubFile {
 			files,
 			EpubFile{
 				Title:    ch[1],
+				Id:       "Chapter" + strconv.Itoa(n+1),
 				Content:  content,
 				Filename: "OEBPS/Text/Chapter" + strconv.Itoa(n+1) + ".xhtml",
 				Mimetype: "application/xhtml+xml",
