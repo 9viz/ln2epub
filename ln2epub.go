@@ -93,9 +93,6 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 		if i.Id == "cover" {
 			cover = i
 		}
-		if i.Mimetype != "application/xhtml+xml" {
-			continue
-		}
 		content.WriteString("\n<item id='")
 		content.WriteString(i.Id)
 		content.WriteString("' href='")
