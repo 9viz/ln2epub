@@ -58,9 +58,12 @@ func EpubstripOebpsPrefix(filename string) string {
 // series, IDENTIFIER is the value of unique-identifier for the
 // series, FILES is a list of EpubFile.
 // Filenames are stripped off "OEBPS/" prefix.
+// If the epub file Id is "cover", then it is taken as the cover image
+// page and treated specially.
 // The unique identifier used will always be "BookId".
 func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	var content bytes.Buffer
+	var cover EpubFile
 
 	// Header.
 	content.WriteString(`<?xml version="1.0" encoding="utf-8"?>
@@ -87,6 +90,9 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	// Manifest section.
 	content.WriteString("<manifest>")
 	for _, i := range files {
+		if i.Id == "cover" {
+			cover = i
+		}
 		if i.Mimetype != "application/xhtml+xml" {
 			continue
 		}
@@ -112,14 +118,19 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	}
 	content.WriteString("\n</spine>\n")
 
-	// No optional guide section.
+	if cover.Id == "cover" {
+		content.WriteString(`<guide><reference type="cover" title="Cover" href="`)
+		content.WriteString(EpubstripOebpsPrefix(cover.Filename))
+		content.WriteString(`" /></guide>`)
+	}
 	content.WriteString("</package>\n")
 	return content.Bytes()
 }
 
 // Return the file contents of the toc.ncx file for the series.
 // Arguments have the same meaning as for EpubContentOpf.
-// FILES with a mimetype other than xhtml are simply ignored.
+// FILES with a mimetype other than xhtml, and cover image xhtml file
+// are ignored.
 // Filenames are stripped off "OEBPS/" prefix.
 func EpubTocNcx(author, identifer, title string, files []EpubFile) []byte {
 	var content bytes.Buffer
@@ -151,6 +162,10 @@ func EpubTocNcx(author, identifer, title string, files []EpubFile) []byte {
 	for _, i := range files {
 		// Non-xhtml files.
 		if i.Mimetype != "application/xhtml+xml" {
+			continue
+		}
+		// Ignore cover page.
+		if i.Id == "cover" {
 			continue
 		}
 		content.WriteString("\n<navPoint id='")
