@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/anaskhan96/soup"
-	"golang.org/x/net/proxy"
+	// "golang.org/x/net/proxy"
 	"io/ioutil"
 	"net/http"
-	nurl "net/url"
+	// nurl "net/url"
 	"os"
 	"path"
 	"regexp"
@@ -288,13 +288,14 @@ var RHEADERS map[string][]string = map[string][]string{
 func fetch(url string) ([]byte, error) {
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header = RHEADERS
-	proxyURL, err := nurl.Parse("socks5://127.0.0.1:9050")
-	dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
-	if err != nil {
-		panic(err)
-	}
-	transport := &http.Transport{Dial: dialer.Dial}
-	client := &http.Client{Transport: transport}
+	// proxyURL, err := nurl.Parse("socks5://127.0.0.1:9050")
+	// dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// transport := &http.Transport{Dial: dialer.Dial}
+	// client := &http.Client{Transport: transport}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	client.CloseIdleConnections()
 	if err != nil {
