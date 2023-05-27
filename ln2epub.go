@@ -115,6 +115,8 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	}
 	content.WriteString("\n</spine>\n")
 
+	// TODO: Should also include <meta name="cover"> in the
+	// metadata section.
 	if cover.Id == "cover" {
 		content.WriteString(`<guide><reference type="cover" title="Cover" href="`)
 		content.WriteString(EpubstripOebpsPrefix(cover.Filename))
@@ -311,10 +313,35 @@ func Request(url string) (string, error) {
 }
 
 // Fetch the image from url URL.
-// This returns the image file contents, image mimetype.
+// Return the image file contents, image mimetype.
 func FetchImage(url string) ([]byte, string) {
 	img, _ := fetch(url)
 	return img, http.DetectContentType(img)
+}
+
+// Fetched images with key as URL.
+var ImageCache = make(map[string]EpubFile)
+
+// Return image located at URL if cached, or make new one.
+// N is the chapter name, and IMGCOUNTER is the number assigned to
+// image.  These are used if it is not found in `ImageCache'.
+// The second return value is the new IMGCOUNTER value.
+func FetchImageCached(url string, n, imgCounter int) (EpubFile, int) {
+	var ifile EpubFile
+	var ok bool
+	if ifile, ok = ImageCache[url]; !ok {
+		imgId := fmt.Sprintf("Img%d_Ch%d", imgCounter, n)
+		img, mimetype := FetchImage(url)
+		ifile = EpubFile{
+			Id: imgId,
+			Filename: "OEBPS/Images/" + imgId,
+			Mimetype: mimetype,
+			Content: img,
+		}
+		ImageCache[url] = ifile
+		imgCounter += 1
+	}
+	return ifile, imgCounter
 }
 
 // * Soafp
@@ -432,11 +459,14 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 		}
 
 		if c.Pointer.Data == "div" && SoafpisImg(c.Attrs()["class"]) {
-			imgCounter += 1
 			imgAttrs := c.Find("img").Attrs()
-			img, mimetype := FetchImage(imgAttrs["src"])
-			imgId := fmt.Sprintf("Ch%d_img%d", n, imgCounter)
-			imgFileName := "Images/" + imgId
+			ifile, ic := FetchImageCached(imgAttrs["href"], n, imgCounter)
+			// New image.
+			if ic != imgCounter {
+				imgCounter = ic
+				extra = append(extra, ifile)
+			}
+			imgFileName := EpubstripOebpsPrefix(ifile.Filename)
 
 			ret.WriteString("<img src='../")
 			ret.WriteString(imgFileName)
@@ -447,14 +477,6 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 				}
 			}
 			ret.WriteString("/>\n")
-
-			extra = append(extra,
-				EpubFile{
-					Id:       imgId,
-					Content:  img,
-					Filename: "OEBPS/" + imgFileName,
-					Mimetype: mimetype,
-				})
 
 			continue
 		}
@@ -476,7 +498,7 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 }
 
 // Return the list of EpubFile for the series in URL.
-func SoafpEpubFiles(url string) []EpubFile {
+func SoafpEpubFiles(url string) map[string][]EpubFile {
 	var files []EpubFile
 	chs := SoafpGetChapters(url)
 
@@ -496,7 +518,274 @@ func SoafpEpubFiles(url string) []EpubFile {
 	}
 
 	title := SoafpGetSeriesTitle(url)
-	return EpubAddExtra("", title, title, files)
+	return map[string][]EpubFile{
+		url: EpubAddExtra("", title, title, files),
+	}
+}
+
+// * Shalvation Translations
+
+// Get the author of the series with TOC page soup SP.
+func ShalvationGetAuthor(sp soup.Root) string {
+	// The first <string> tag is for the author.
+	strong := sp.Find("div", "class", "entry-content").Find("strong")
+	// Needs to be HTML().  Text() and FullText() both return an
+	// empty string.
+	return strong.FindNextSibling().HTML()
+}
+
+// Return the cover image URL of the series with TOC page soup SP.
+func ShalvationGetCoverImg(sp soup.Root) string {
+	return sp.Find("div", "class", "entry-content").Find("img").Attrs()["src"]
+}
+
+// Return the synposis HTML for the series with TOC page soup SP.
+// An empty string is returned if there is none.
+func ShalvationGetSynopsis(sp soup.Root) string {
+	var h strings.Builder
+	synp := sp.Find("div", "class", "entry-content").Find("h4")
+	// First check if it is a synposis heading.
+	if strings.ToLower(strings.TrimSpace(synp.Text())) == "synposis" {
+		return ""
+	}
+
+	h.WriteString(synp.HTML())
+	// The synposis lasts till a <hr> tag.
+	for s := synp.FindNextSibling(); s.Pointer != nil &&
+		s.Pointer.Data != "hr"; s = s.FindNextSibling() {
+		h.WriteString(s.HTML())
+	}
+
+	return h.String()
+}
+
+func ShalvationendOfVol(s soup.Root) bool {
+	return s.Pointer.Data == "div" &&
+		strings.HasPrefix(s.Attrs()["id"], "atatags-")
+}
+
+func ShalvationvolLinks(sp soup.Root) [][]string {
+	var links [][]string
+
+	for s := sp.FindNextSibling(); s.Pointer != nil &&
+		s.Pointer.Data != "hr" && !ShalvationendOfVol(s);
+	s = s.FindNextSibling() {
+		if a := s.Find("a"); a.Pointer != nil {
+			if strings.Contains(a.Attrs()["href"], "drive.google.com") {
+				continue
+			}
+			links = append(links, []string{a.FullText(), a.Attrs()["href"]})
+		} else if img := s.Find("img"); img.Pointer != nil {
+			links = append(links, []string{"cover", img.Attrs()["src"]})
+		}
+	}
+	if len(links) == 1 {
+		return nil
+	}
+	return links
+}
+
+// Return links for each chapter in every volume for TOC page soup SP.
+// A map is written where key is the name of the volume, and value is
+// a list of [ CHAPTERNAME, CHAPTERURL ].
+func ShalvationGetVols(sp soup.Root) map[string][][]string {
+	vols := make(map[string][][]string)
+	div := sp.Find("div", "class", "entry-content")
+
+	for _, h4 := range div.FindAll("h4") {
+		if strings.ToLower(h4.Text()) == "synposis" {
+			continue
+		}
+		vol := ShalvationvolLinks(h4)
+		if vol == nil {
+			continue
+		}
+		vols[h4.Text()] = vol
+	}
+
+	return vols
+}
+
+var ShalvationChapterNoRe = regexp.MustCompile(`Chapter [0-9]+ – `)
+
+func ShalvationstripChapterNo(chaptername string) string {
+	return ShalvationChapterNoRe.ReplaceAllString(chaptername, "")
+}
+
+// Return content for chapter URL with CHAPTERNAME, chapter no. N.
+// If the chapter has images, then it is returned as the second
+// argument.
+func ShalvationGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+	var content bytes.Buffer
+	var imgBuf strings.Builder
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	chaptername = ShalvationstripChapterNo(chaptername)
+	content.WriteString(EpubContentPreamble(chaptername))
+
+	sp := soup.HTMLParse(h)
+	div := sp.Find("div", "class", "entry-content")
+	firstHrSkipped := false
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if c.Pointer.Data == "hr" && !firstHrSkipped {
+			firstHrSkipped = true
+		} else if c.Pointer.Data == "h4" &&
+			strings.Contains(c.Text(), chaptername) {
+			content.WriteString("<h1>")
+			content.WriteString(chaptername)
+			content.WriteString("</h1>\n")
+		} else if imgs := c.FindAll("img"); len(imgs) != 0 {
+			for _, img := range imgs {
+				ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
+				// New image.
+				if ic != imgCounter {
+					extra = append(extra, ifile)
+					imgCounter = ic
+				}
+				imgBuf.WriteString("<img src='../")
+				imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
+				imgBuf.WriteString("' ")
+				for _, a := range []string{"width", "alt", "height"} {
+					if at, ok := img.Attrs()[a]; ok {
+						imgBuf.WriteString(a)
+						imgBuf.WriteString("='")
+						imgBuf.WriteString(at)
+						imgBuf.WriteString("' ")
+					}
+				}
+				imgBuf.WriteString("/>")
+
+				if c.Text() == "" {
+					content.WriteString("<p>")
+					content.WriteString(imgBuf.String())
+					content.WriteString("</p>")
+				} else {
+					content.WriteString(
+						strings.ReplaceAll(c.HTML(),
+							img.HTML(),
+							imgBuf.String()))
+				}
+				content.WriteString("\n")
+				imgBuf.Reset()
+			}
+		} else if u := c.Find("span"); u.Pointer != nil &&
+			(strings.HasPrefix(u.Attrs()["id"], "more-") ||
+				strings.HasPrefix(u.Attrs()["style"], "color:#4c4c48;")) {
+			continue
+		} else if a := c.Find("a"); a.Pointer != nil &&
+			(strings.Contains(a.Text(), " CHAPTER") ||
+				strings.Contains(a.Text(), "VOLUME")) {
+			// TODO: Condition to break the chapters is
+			// extremely adhoc, need to fix it.
+			break
+		} else {
+			content.WriteString(c.HTML())
+		}
+	}
+
+	content.WriteString(EpubContentEnd())
+
+	return content.Bytes(), extra
+}
+
+func ShalvationprepVol(links [][]string) []EpubFile {
+	var files []EpubFile
+	n := 1
+	for _, l := range links {
+		switch l[0] {
+		case "cover":
+			fmt.Println("Fetching cover page...")
+			cover, mimetype := FetchImage(l[1])
+			c := EpubFile{
+				Id: "_cover-image",
+				Filename: "OEBPS/Images/cover",
+				Mimetype: mimetype,
+				Content: cover}
+			files = append(files, c)
+			ImageCache[l[1]] = c
+
+			var cfile bytes.Buffer
+			cfile.WriteString(EpubContentPreamble("cover"))
+			cfile.WriteString("<img src='../Images/cover' />")
+			cfile.WriteString(EpubContentEnd())
+
+			files = append(files,
+				EpubFile{
+					Title: "Cover",
+					Id: "cover",
+					Filename: "OEBPS/Text/Cover.xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: cfile.Bytes(),
+				})
+		case "Illustrations":
+			fmt.Println("Fetching illustrations...")
+			f, e := ShalvationGetChapter(l[1], "Illustrations", -1)
+			files = append(files, e...)
+			files = append(files,
+				EpubFile{
+					Title: "Illustrations",
+					Id: "illustrations",
+					Filename: "OEBPS/Text/Illustrations.xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: f,
+				})
+		default:
+			fmt.Println("Fetching", l[0])
+			cid := "Chapter" + strconv.Itoa(n)
+			f, e := ShalvationGetChapter(l[1], l[0], n)
+			files = append(files, e...)
+			files = append(files,
+				EpubFile{
+					Title: l[0],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: f,
+				})
+			n += 1
+		}
+	}
+	return files
+}
+
+var ShalvationtitleRe = regexp.MustCompile(` Table[\s\p{Zs}][oO]f[\s\p{Zs}]Contents$`)
+
+// Return the title for the series TOC soup SP.
+func ShalvationGetTitle(sp soup.Root) string {
+	title := sp.Find("h1", "class", "entry-title")
+	return ShalvationtitleRe.ReplaceAllString(title.Text(), "")
+}
+
+// Return the epub files for series TOC URL.
+func ShalvationEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	ret := make(map[string][]EpubFile)
+
+	sp := soup.HTMLParse(h)
+	vols := ShalvationGetVols(sp)
+	author := ShalvationGetAuthor(sp)
+	title := ShalvationGetTitle(sp)
+
+	for vol, links := range vols {
+		files := ShalvationprepVol(links)
+		files = append(files,
+			EpubAddExtra(author,
+				strings.ReplaceAll(title + vol, " ", "-"),
+				title + " " + vol,
+				files)...)
+		ret["/" + strings.ReplaceAll(vol, " ", "-")] = files
+	}
+	return ret
 }
 
 // * Common routines
@@ -514,17 +803,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	files := make(map[string][]EpubFile)
 	for _, u := range os.Args[1:] {
-		f := EpubFileName(u)
 		switch {
 		case strings.Contains(u, "soafp.com"):
-			EpubCreateFile(f, SoafpEpubFiles(u))
-			fmt.Println("Created epub file", f, "for", u)
+			files = SoafpEpubFiles(u)
+		case strings.Contains(u, "shalvationtranslations.wordpress.com"):
+			files = ShalvationEpubFiles(u)
+		}
+		for uu, ef := range files {
+			f := EpubFileName(uu)
+			EpubCreateFile(f, ef)
+			fmt.Println("Created epub file", f, "for", uu)
 		}
 	}
 }
 
 // Local Variables:
+// compile-command: "go run ln2epub.go"
 // outline-regexp: "// \\(\\*+\\) "
 // eval: (outline-minor-mode)
 // eval: (reveal-mode)
