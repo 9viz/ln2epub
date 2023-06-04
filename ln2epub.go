@@ -344,6 +344,29 @@ func FetchImageCached(url string, n, imgCounter int) (EpubFile, int) {
 	return ifile, imgCounter
 }
 
+
+// * Common routines
+
+// Return an approriate epub filename for URL.
+// TODO: Should include an optional part to indicate how many chapters
+// have been fetched.
+func EpubFileName(url string) string {
+	return path.Base(strings.TrimSuffix(url, "/")) + ".epub"
+}
+
+// From https://github.com/anaskhan96/soup/issues/63.
+func SoupFindParent(r soup.Root, tagName string) soup.Root {
+	parent := r.Pointer.Parent
+	if parent == nil {
+		return soup.Root{Pointer: parent}
+	}
+	rParent := soup.Root{Pointer: parent, NodeValue: parent.Data}
+	if strings.ToLower(parent.Data) == strings.ToLower(tagName) {
+		return rParent
+	}
+	return SoupFindParent(rParent, tagName)
+}
+
 // * Soafp
 
 // TODO: Get description of the series and cover image.
@@ -788,13 +811,133 @@ func ShalvationEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
-// * Common routines
+// * Baka-tsuki (Hyouka)
 
-// Return an approriate epub filename for URL.
-// TODO: Should include an optional part to indicate how many chapters
-// have been fetched.
-func EpubFileName(url string) string {
-	return path.Base(strings.TrimSuffix(url, "/")) + ".epub"
+// Return link to all the volumes in URL URL.
+// Returned is a list of [ TITLE, LINK ] where TITLE is the title of
+// the volume, and LINK is the link to the volume full text.
+func BakatsukiGetVolumes(url string) [][]string {
+	var ret [][]string
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	soup := soup.HTMLParse(h)
+
+	for _, i := range soup.FindAll("span", "class", "mw-headline") {
+		if a := i.Find("a"); a.Pointer != nil && a.Text() == "Full Text" {
+			ret = append(ret,
+				[]string{
+					// -2 to remove " (" from the end.
+					i.Text()[:len(i.Text())-2],
+					"https://www.baka-tsuki.org" + i.Find("a").Attrs()["href"],
+				})
+		}
+	}
+	return ret
+}
+
+// Return the EpubFiles for volume with URL URL.
+func BakatsukiPrepVol(url string) []EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	soup := soup.HTMLParse(h)
+
+	var files []EpubFile
+
+	spans := soup.FindAll("h2")
+	chi := 1
+	for sn, h2 := range spans {
+		var chapter bytes.Buffer
+		var imgBuf strings.Builder
+
+		i := h2.Find("span", "class", "mw-headline")
+		if i.Pointer == nil {
+			continue
+		}
+		chid := "Chapter" + strconv.Itoa(chi)
+		imgCounter := 1
+
+		chapter.WriteString(EpubContentPreamble(i.Text()))
+		chapter.WriteString("<h1>")
+		chapter.WriteString(i.Text())
+		chapter.WriteString("</h1>\n")
+
+		for s := h2.FindNextSibling(); s.Pointer != nil &&
+			s.Pointer.Data != "h2"; s = s.FindNextSibling() {
+			if sn == len(spans)-1 && s.Pointer.Data == "table" {
+				break
+			}
+			str := s.HTML()
+			if edit := s.Find("span", "class", "mw-editsection"); edit.Pointer != nil {
+				str = strings.ReplaceAll(str, edit.HTML(), "")
+			}
+			if imgs := s.FindAll("img"); len(imgs) != 0 {
+				for _, im := range imgs {
+					ifile, ic := FetchImageCached(
+						"https://baka-tsuki.org" + im.Attrs()["src"],
+						chi+1, imgCounter)
+					if ic != imgCounter {
+						files = append(files, ifile)
+						imgCounter = ic
+					}
+					imgBuf.WriteString("<img src='../")
+					imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
+					imgBuf.WriteString("' ")
+					for _, a := range []string{"width", "alt", "height"} {
+						if at, ok := im.Attrs()[a]; ok {
+							imgBuf.WriteString(a)
+							imgBuf.WriteString("='")
+							imgBuf.WriteString(at)
+							imgBuf.WriteString("' ")
+						}
+					}
+					imgBuf.WriteString("/>")
+					str = strings.ReplaceAll(
+						str,
+						im.HTML(),
+						imgBuf.String(),
+					)
+					imgBuf.Reset()
+				}
+			}
+			chapter.WriteString(str)
+		}
+
+		chapter.WriteString(EpubContentEnd())
+		files = append(files,
+			EpubFile{
+				Title: i.Text(),
+				Content: chapter.Bytes(),
+				Filename: "OEBPS/Text/" + chid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Id: chid,
+			})
+		chi += 1
+		chapter.Reset()
+	}
+
+	return files
+}
+
+// Return EpubFiles for each volume in series URL URL.
+func BakatsukiEpubFiles(url string) map[string][]EpubFile {
+	ret := make(map[string][]EpubFile)
+	vols := BakatsukiGetVolumes(url)
+
+	for _, vol := range vols {
+		fmt.Println("Fetching", vol[1])
+		chps := BakatsukiPrepVol(vol[1])
+		v := "/" + strings.ReplaceAll(vol[0], "/", "∕")
+		v = strings.ReplaceAll(v, " ", "_")
+		ret[v] = EpubAddExtra("Baka-Tsuki TL",
+				strings.ReplaceAll(vol[0], " ", "-"),
+			vol[0], chps)
+	}
+
+	return ret
 }
 
 func main() {
@@ -810,6 +953,8 @@ func main() {
 			files = SoafpEpubFiles(u)
 		case strings.Contains(u, "shalvationtranslations.wordpress.com"):
 			files = ShalvationEpubFiles(u)
+		case strings.Contains(u, "baka-tsuki.org"):
+			files = BakatsukiEpubFiles(u)
 		}
 		for uu, ef := range files {
 			f := EpubFileName(uu)
