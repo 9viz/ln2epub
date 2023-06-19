@@ -436,6 +436,10 @@ func SoafpisEnd(value string) bool {
 		HtmlValueContains("daddy", value)
 }
 
+func SoafpisSettingsButton(value string) bool {
+	return HtmlValueContains("pre-bar", value)
+}
+
 func SoafpisImg(value string) bool {
 	return HtmlValueContains("wp-block-image", value)
 }
@@ -450,6 +454,7 @@ func SoafpstripChapterNo(chaptername string) string {
 // Return content for chapter URL with CHAPTERNAME, chapter no. N.
 // If the chapter has extra files, then it is returned as the second
 // argument.
+// TODO: Replace all images like in the rest.
 func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
 	var extra []EpubFile
@@ -474,6 +479,10 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	imgCounter := 0
 	for _, c := range divChildren {
 		if c.Pointer.Data == "div" && SoafpisAd(c.Attrs()["class"]) {
+			continue
+		}
+
+		if c.Pointer.Data == "div" && SoafpisSettingsButton(c.Attrs()["class"]) {
 			continue
 		}
 
@@ -838,6 +847,7 @@ func BakatsukiGetVolumes(url string) [][]string {
 }
 
 // Return the EpubFiles for volume with URL URL.
+// TODO: It would be nice to have working TL note links.
 func BakatsukiPrepVol(url string) []EpubFile {
 	h, err := Request(url)
 	if err != nil {
