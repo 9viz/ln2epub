@@ -1,5 +1,3 @@
-// TODO: Should generalise <img> rewriting code in all chapter fetch
-// functions.
 package main
 
 import (
@@ -369,6 +367,72 @@ func SoupFindParent(r soup.Root, tagName string) soup.Root {
 	return SoupFindParent(rParent, tagName)
 }
 
+// Fetch images in IMGS and replace HTML with local `src' value.
+// IMGCOUNTER is the number of image in this chapter, N is the chapter
+// number, and ADDTO is the list to add EpubFile struct of the fetched
+// image to.
+// New value of HTML, IMGCOUNTER, ADDTO are returned.
+func ReplaceImgTags(html string, imgs []soup.Root, imgCounter, n int, addto []EpubFile) (string, int, []EpubFile) {
+	if len(imgs) == 0 {
+		return html, imgCounter, addto
+	}
+	var imgBuf strings.Builder
+
+	for _, img := range imgs {
+		ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
+		// New image.
+		if ic != imgCounter {
+			addto = append(addto, ifile)
+			imgCounter = ic
+		}
+		imgBuf.WriteString("<img src='../")
+		imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
+		imgBuf.WriteString("' ")
+		for _, a := range []string{"width", "alt", "height"} {
+			if at, ok := img.Attrs()[a]; ok {
+				imgBuf.WriteString(a)
+				imgBuf.WriteString("='")
+				imgBuf.WriteString(at)
+				imgBuf.WriteString("' ")
+			}
+		}
+		imgBuf.WriteString("/>")
+
+		html = strings.ReplaceAll(html,
+				img.HTML(),
+				imgBuf.String())
+	}
+
+	return html, imgCounter, addto
+}
+
+// Fetch and add cover with URL URL to FILES.
+func AddCoverImage(url string, files []EpubFile) []EpubFile {
+	cover, mimetype := FetchImage(url)
+	c := EpubFile{
+		Id: "_cover-image",
+		Filename: "OEBPS/Images/cover",
+		Mimetype: mimetype,
+		Content: cover}
+	files = append(files, c)
+	ImageCache[url] = c
+
+	var cfile bytes.Buffer
+	cfile.WriteString(EpubContentPreamble("cover"))
+	cfile.WriteString("<img src='../Images/cover' />")
+	cfile.WriteString(EpubContentEnd())
+
+	files = append(files,
+		EpubFile{
+			Title: "Cover",
+			Id: "cover",
+			Filename: "OEBPS/Text/Cover.xhtml",
+			Mimetype: "application/xhtml+xml",
+			Content: cfile.Bytes(),
+		})
+	return files
+}
+
 // * Soafp
 
 // TODO: Get description of the series and cover image.
@@ -651,7 +715,6 @@ func ShalvationstripChapterNo(chaptername string) string {
 // argument.
 func ShalvationGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	var content bytes.Buffer
-	var imgBuf strings.Builder
 	var extra []EpubFile
 
 	h, err := Request(url)
@@ -675,39 +738,12 @@ func ShalvationGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 			content.WriteString(chaptername)
 			content.WriteString("</h1>\n")
 		} else if imgs := c.FindAll("img"); len(imgs) != 0 {
-			for _, img := range imgs {
-				ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
-				// New image.
-				if ic != imgCounter {
-					extra = append(extra, ifile)
-					imgCounter = ic
-				}
-				imgBuf.WriteString("<img src='../")
-				imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
-				imgBuf.WriteString("' ")
-				for _, a := range []string{"width", "alt", "height"} {
-					if at, ok := img.Attrs()[a]; ok {
-						imgBuf.WriteString(a)
-						imgBuf.WriteString("='")
-						imgBuf.WriteString(at)
-						imgBuf.WriteString("' ")
-					}
-				}
-				imgBuf.WriteString("/>")
-
-				if c.Text() == "" {
-					content.WriteString("<p>")
-					content.WriteString(imgBuf.String())
-					content.WriteString("</p>")
-				} else {
-					content.WriteString(
-						strings.ReplaceAll(c.HTML(),
-							img.HTML(),
-							imgBuf.String()))
-				}
-				content.WriteString("\n")
-				imgBuf.Reset()
-			}
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs,
+				imgCounter, n,
+				extra)
+			content.WriteString(html)
 		} else if u := c.Find("span"); u.Pointer != nil &&
 			(strings.HasPrefix(u.Attrs()["id"], "more-") ||
 				strings.HasPrefix(u.Attrs()["style"], "color:#4c4c48;")) {
@@ -735,28 +771,7 @@ func ShalvationprepVol(links [][]string) []EpubFile {
 		switch l[0] {
 		case "cover":
 			fmt.Println("Fetching cover page...")
-			cover, mimetype := FetchImage(l[1])
-			c := EpubFile{
-				Id: "_cover-image",
-				Filename: "OEBPS/Images/cover",
-				Mimetype: mimetype,
-				Content: cover}
-			files = append(files, c)
-			ImageCache[l[1]] = c
-
-			var cfile bytes.Buffer
-			cfile.WriteString(EpubContentPreamble("cover"))
-			cfile.WriteString("<img src='../Images/cover' />")
-			cfile.WriteString(EpubContentEnd())
-
-			files = append(files,
-				EpubFile{
-					Title: "Cover",
-					Id: "cover",
-					Filename: "OEBPS/Text/Cover.xhtml",
-					Mimetype: "application/xhtml+xml",
-					Content: cfile.Bytes(),
-				})
+			files = AddCoverImage(l[1], files)
 		case "Illustrations":
 			fmt.Println("Fetching illustrations...")
 			f, e := ShalvationGetChapter(l[1], "Illustrations", -1)
@@ -863,7 +878,6 @@ func BakatsukiPrepVol(url string) []EpubFile {
 	chi := 1
 	for sn, h2 := range spans {
 		var chapter bytes.Buffer
-		var imgBuf strings.Builder
 
 		i := h2.Find("span", "class", "mw-headline")
 		if i.Pointer == nil {
@@ -886,35 +900,8 @@ func BakatsukiPrepVol(url string) []EpubFile {
 			if edit := s.Find("span", "class", "mw-editsection"); edit.Pointer != nil {
 				str = strings.ReplaceAll(str, edit.HTML(), "")
 			}
-			if imgs := s.FindAll("img"); len(imgs) != 0 {
-				for _, im := range imgs {
-					ifile, ic := FetchImageCached(
-						"https://baka-tsuki.org" + im.Attrs()["src"],
-						chi+1, imgCounter)
-					if ic != imgCounter {
-						files = append(files, ifile)
-						imgCounter = ic
-					}
-					imgBuf.WriteString("<img src='../")
-					imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
-					imgBuf.WriteString("' ")
-					for _, a := range []string{"width", "alt", "height"} {
-						if at, ok := im.Attrs()[a]; ok {
-							imgBuf.WriteString(a)
-							imgBuf.WriteString("='")
-							imgBuf.WriteString(at)
-							imgBuf.WriteString("' ")
-						}
-					}
-					imgBuf.WriteString("/>")
-					str = strings.ReplaceAll(
-						str,
-						im.HTML(),
-						imgBuf.String(),
-					)
-					imgBuf.Reset()
-				}
-			}
+			str, imgCounter, files = ReplaceImgTags(str, s.FindAll("img"),
+				imgCounter, chi, files)
 			chapter.WriteString(str)
 		}
 
@@ -992,7 +979,6 @@ func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	}
 
 	var content bytes.Buffer
-	var imgBuf strings.Builder
 	var extra []EpubFile
 	content.WriteString(EpubContentPreamble(chaptername))
 
@@ -1023,35 +1009,9 @@ func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 		if !start {
 			continue
 		}
-		html := p.HTML()
-		if imgs :=  p.FindAll("img"); len(imgs) != 0 {
-			for _, img := range imgs {
-				ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
-				// New image.
-				if ic != imgCounter {
-					extra = append(extra, ifile)
-					imgCounter = ic
-				}
-				imgBuf.WriteString("<img src='../")
-				imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
-				imgBuf.WriteString("' ")
-				for _, a := range []string{"width", "alt", "height"} {
-					if at, ok := img.Attrs()[a]; ok {
-						imgBuf.WriteString(a)
-						imgBuf.WriteString("='")
-						imgBuf.WriteString(at)
-						imgBuf.WriteString("' ")
-					}
-				}
-				imgBuf.WriteString("/>")
-				html = strings.ReplaceAll(html,
-					img.HTML(),
-					imgBuf.String())
-				imgBuf.Reset()
-			}
-			continue
-		}
-
+		var html string
+		html, imgCounter, extra = ReplaceImgTags(p.HTML(), p.FindAll("img"),
+			imgCounter, n, extra)
 		content.WriteString(html)
 	}
 
