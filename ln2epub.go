@@ -399,8 +399,8 @@ func ReplaceImgTags(html string, imgs []soup.Root, imgCounter, n int, addto []Ep
 		imgBuf.WriteString("/>")
 
 		html = strings.ReplaceAll(html,
-				img.HTML(),
-				imgBuf.String())
+			img.HTML(),
+			imgBuf.String())
 	}
 
 	return html, imgCounter, addto
@@ -1061,6 +1061,131 @@ func TravisEpubFiles(url string) map[string][]EpubFile {
 	}
 }
 
+// * Kequeen TLs
+// Return list of chapter names in volume soup SUP.
+// A list of [ NAME, CURL ] where NAME is chapter name with URL CURL.
+// The cover link is returned with NAME being "cover"
+func KequeenGetChapters(sup soup.Root) [][]string {
+	var chs [][]string
+
+	for _, img := range sup.Find("main", "id", "main").FindAll("img") {
+		if href := img.Attrs()["src"]; strings.Contains(href, "cover") ||
+			strings.Contains(href, "Cover") {
+			chs = append(chs, []string{"cover", href})
+			break
+		}
+	}
+
+	for _, a := range sup.Find("main", "id", "main").FindAll("a") {
+		chs = append(chs, []string{a.FullText(), a.Attrs()["href"]})
+	}
+
+	return chs
+}
+
+// Return chapter content, and extra files for chapter URL URL.
+// Chapter name is given by CHAPTERNAME, and chapter no. by N.
+func KequeenGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	sup := soup.HTMLParse(h)
+	div := sup.Find("div", "class", "entry-content").FindAll("div", "class", "elementor-widget-container")
+
+	var content bytes.Buffer
+	var extra []EpubFile
+	// var imgBuf strings.Builder
+
+	content.WriteString(EpubContentPreamble(chaptername))
+	content.WriteString("<h1>")
+	content.WriteString(chaptername)
+	content.WriteString("</h1>\n")
+
+	firsth2skipped := false
+	imgCounter := 1
+
+	for _, i := range div {
+		if h2 := i.Find("h2", "class", "elementor-heading-title"); h2.Pointer != nil &&
+			!firsth2skipped {
+			firsth2skipped = true
+			continue
+		}
+		if spacer := i.Find("div", "class", "elementor-spacer-inner"); spacer.Pointer != nil &&
+			len(spacer.Children()) == 0 {
+			continue
+		}
+		for _, c := range i.Children() {
+			if c.Pointer.Data == "style" {
+				continue
+			}
+			html := c.HTML()
+			if c.Pointer.Data == "img" {
+				html, imgCounter, extra =  ReplaceImgTags(
+					html, []soup.Root{c},
+					imgCounter, n, extra)
+			}
+			content.WriteString(html)
+			content.WriteString("\n")
+		}
+	}
+	content.WriteString(EpubContentEnd())
+
+	return content.Bytes(), extra
+}
+
+// Return the page title for volume/series with soup SUP.
+func KequeenGetSeriesTitle(sup soup.Root) string {
+	title := sup.Find("head").Find("title")
+	if title.Pointer == nil {
+		return "***UNKNOWN***"
+	}
+	s := title.FullText()
+	return strings.TrimSuffix(s, " – KequeenTLS")
+}
+
+// Return the files for the series with URL URL.
+func KequeenEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	chapters := KequeenGetChapters(sup)
+	seriesTitle := KequeenGetSeriesTitle(sup)
+
+	var files []EpubFile
+	n := 1
+	for _, ch := range chapters {
+		if ch[0] == "cover" {
+			fmt.Println("Fetching volume cover")
+			files = AddCoverImage(ch[1], files)
+			continue
+		}
+		fmt.Println("Fetching", ch[1])
+		content, extra := KequeenGetChapter(ch[1], ch[0], n+1)
+		cid := "Chapter" + strconv.Itoa(n+1)
+		files = append(files,
+			EpubFile{
+				Title: ch[0],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+		n++
+	}
+	return map[string][]EpubFile{
+		seriesTitle: EpubAddExtra(
+			"KequeenTLS",
+			url, seriesTitle,
+			files),
+	}
+}
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1078,6 +1203,8 @@ func main() {
 			files = BakatsukiEpubFiles(u)
 		case strings.Contains(u, "travistranslations.com/novel/"):
 			files = TravisEpubFiles(u)
+		case strings.Contains(u, "kequeentls.com"):
+			files = KequeenEpubFiles(u)
 		}
 		for uu, ef := range files {
 			f := EpubFileName(uu)
