@@ -1054,7 +1054,7 @@ func TravisEpubFiles(url string) map[string][]EpubFile {
 		files = append(files, extra...)
 	}
 	return map[string][]EpubFile{
-		url: EpubAddExtra(
+		seriesTitle: EpubAddExtra(
 			"Travis Translations",
 			url, seriesTitle,
 			files),
