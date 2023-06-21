@@ -63,7 +63,33 @@ func EpubstripOebpsPrefix(filename string) string {
 // The unique identifier used will always be "BookId".
 func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	var content bytes.Buffer
+	var manifest strings.Builder
 	var cover EpubFile
+	var coverImg EpubFile
+
+	// Do the manifest first and figure out if there's a cover
+	// image.
+	manifest.WriteString("<manifest>")
+	for _, i := range files {
+		if i.Id == "cover" {
+			cover = i
+		}
+		if i.Id == "cover-image" {
+			coverImg = i
+		}
+		manifest.WriteString("\n<item id='")
+		manifest.WriteString(i.Id)
+		manifest.WriteString("' href='")
+		manifest.WriteString(EpubstripOebpsPrefix(i.Filename))
+		manifest.WriteString("' media-type='")
+		manifest.WriteString(i.Mimetype)
+		manifest.WriteString("'")
+		if i.Id == "cover-image" {
+			manifest.WriteString(" properties='cover-image'")
+		}
+		manifest.WriteString(" />")
+	}
+	manifest.WriteString("\n<item id='ncx' href='toc.ncx' media-type='application/x-dtbncx+xml'/>\n</manifest>\n")
 
 	// Header.
 	content.WriteString(`<?xml version="1.0" encoding="utf-8"?>
@@ -85,23 +111,18 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	content.WriteString(`<dc:date opf:event="modification" xmlns:opf="http://www.idpf.org/2007/opf">`)
 	content.WriteString(time.Now().Format("2022-01-18"))
 	content.WriteString("</dc:date>\n")
+	if coverImg.Id == "cover-image" {
+		content.WriteString("<meta name='cover' content='")
+		// I can't tell what exactly this should be!
+		// Different epubs use different value here, but
+		// thankfully the exact value does not matter.
+		content.WriteString(coverImg.Id)
+		content.WriteString("' />\n")
+	}
 	content.WriteString("</metadata>\n\n")
 
 	// Manifest section.
-	content.WriteString("<manifest>")
-	for _, i := range files {
-		if i.Id == "cover" {
-			cover = i
-		}
-		content.WriteString("\n<item id='")
-		content.WriteString(i.Id)
-		content.WriteString("' href='")
-		content.WriteString(EpubstripOebpsPrefix(i.Filename))
-		content.WriteString("' media-type='")
-		content.WriteString(i.Mimetype)
-		content.WriteString("' />")
-	}
-	content.WriteString("\n<item id='ncx' href='toc.ncx' media-type='application/x-dtbncx+xml'/>\n</manifest>\n")
+	content.WriteString(manifest.String())
 
 	// Spine section.
 	content.WriteString("\n<spine toc='ncx'>")
@@ -115,8 +136,6 @@ func EpubContentOpf(author, identifier, title string, files []EpubFile) []byte {
 	}
 	content.WriteString("\n</spine>\n")
 
-	// TODO: Should also include <meta name="cover"> in the
-	// metadata section.
 	if cover.Id == "cover" {
 		content.WriteString(`<guide><reference type="cover" title="Cover" href="`)
 		content.WriteString(EpubstripOebpsPrefix(cover.Filename))
@@ -410,7 +429,7 @@ func ReplaceImgTags(html string, imgs []soup.Root, imgCounter, n int, addto []Ep
 func AddCoverImage(url string, files []EpubFile) []EpubFile {
 	cover, mimetype := FetchImage(url)
 	c := EpubFile{
-		Id: "_cover-image",
+		Id: "cover-image",
 		Filename: "OEBPS/Images/cover",
 		Mimetype: mimetype,
 		Content: cover}
