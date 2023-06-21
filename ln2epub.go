@@ -1,3 +1,5 @@
+// TODO: Should generalise <img> rewriting code in all chapter fetch
+// functions.
 package main
 
 import (
@@ -1021,6 +1023,7 @@ func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 		if !start {
 			continue
 		}
+		html := p.HTML()
 		if imgs :=  p.FindAll("img"); len(imgs) != 0 {
 			for _, img := range imgs {
 				ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
@@ -1041,23 +1044,15 @@ func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 					}
 				}
 				imgBuf.WriteString("/>")
-
-				if p.Text() == "" {
-					content.WriteString("<p>")
-					content.WriteString(imgBuf.String())
-					content.WriteString("</p>")
-				} else {
-					content.WriteString(
-						strings.ReplaceAll(p.HTML(),
-							img.HTML(),
-							imgBuf.String()))
-				}
-				content.WriteString("\n")
+				html = strings.ReplaceAll(html,
+					img.HTML(),
+					imgBuf.String())
 				imgBuf.Reset()
 			}
+			continue
 		}
 
-		content.WriteString(p.HTML())
+		content.WriteString(html)
 	}
 
 	return content.Bytes(), extra
