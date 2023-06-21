@@ -950,6 +950,162 @@ func BakatsukiEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
+// * Travis Translations
+// Fetch chapter links from series soup SUP.
+// A list of [ CHAPTER-NAME, URL ] is returned.
+func TravisGetChapters(sup soup.Root) [][]string {
+	var div soup.Root
+	// For some reason sup.Find() does not work!
+	for  _, div =  range sup.FindAll("div") {
+		if div.Attrs()["x-show"] == "tab === 'toc'" {
+			break
+		}
+	}
+
+	var chapter [][]string
+	for _, li := range div.Find("ul").Children() {
+		if li.Pointer.Data != "li" {
+			continue
+		}
+		a := li.Find("a")
+		if a.Pointer == nil {
+			continue
+		}
+		chapter = append(chapter,
+			[]string{
+				a.Find("span").FullText(),
+				a.Attrs()["href"]})
+	}
+
+	return chapter
+}
+
+// Return content for URL with name CHAPTERNAME, chapter no. N.
+// If any extra files are to be attached, then it is returned as the
+// second item.
+func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	var content bytes.Buffer
+	var imgBuf strings.Builder
+	var extra []EpubFile
+	content.WriteString(EpubContentPreamble(chaptername))
+
+	sup := soup.HTMLParse(h)
+	div := sup.Find("div", "class", "reader-content").Find("p")
+	start := false
+	imgCounter := 1
+	for p := div; p.Pointer != nil; p = p.FindNextSibling() {
+		if p.Pointer.Data == "p" &&
+			strings.HasPrefix(p.FullText(), "Edited by") {
+			start = true
+			p = p.FindNextSibling() // Skip <hr/>
+		}
+		if p.Pointer.Data == "p" &&
+			p.Attrs()["style"] == "text-align: center;" &&
+			strings.HasPrefix(p.FullText(), "Chapter ") {
+			content.WriteString("<h1>")
+			content.WriteString(p.FullText())
+			content.WriteString("</h1>\n")
+		}
+		if p.Pointer.Data == "hr" {
+			next := p.FindNextSibling().FindNextSibling()
+			if next.Pointer.Data == "p" &&
+				strings.HasPrefix(next.FullText(), "Read ") {
+				break
+			}
+		}
+		if !start {
+			continue
+		}
+		if imgs :=  p.FindAll("img"); len(imgs) != 0 {
+			for _, img := range imgs {
+				ifile, ic := FetchImageCached(img.Attrs()["src"], n, imgCounter)
+				// New image.
+				if ic != imgCounter {
+					extra = append(extra, ifile)
+					imgCounter = ic
+				}
+				imgBuf.WriteString("<img src='../")
+				imgBuf.WriteString(EpubstripOebpsPrefix(ifile.Filename))
+				imgBuf.WriteString("' ")
+				for _, a := range []string{"width", "alt", "height"} {
+					if at, ok := img.Attrs()[a]; ok {
+						imgBuf.WriteString(a)
+						imgBuf.WriteString("='")
+						imgBuf.WriteString(at)
+						imgBuf.WriteString("' ")
+					}
+				}
+				imgBuf.WriteString("/>")
+
+				if p.Text() == "" {
+					content.WriteString("<p>")
+					content.WriteString(imgBuf.String())
+					content.WriteString("</p>")
+				} else {
+					content.WriteString(
+						strings.ReplaceAll(p.HTML(),
+							img.HTML(),
+							imgBuf.String()))
+				}
+				content.WriteString("\n")
+				imgBuf.Reset()
+			}
+		}
+
+		content.WriteString(p.HTML())
+	}
+
+	return content.Bytes(), extra
+}
+
+// Return the series title for series soup SUP.
+func TravisGetSeriesTitle(sup soup.Root) string {
+	div := sup.Find("div", "id", "series-header")
+	if div.Pointer == nil {
+		return "***UNKNOWN***"
+	}
+	return div.Find("h1", "id", "heading").FullText()
+}
+
+// Return the EPub files for the series with URL URL.
+func TravisEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	chapters := TravisGetChapters(sup)
+	seriesTitle := TravisGetSeriesTitle(sup)
+
+	var files []EpubFile
+	for n, ch := range chapters {
+		fmt.Println("Fetching", ch[1])
+		content, extra := TravisGetChapter(ch[1], ch[0], n+1)
+		cid := "Chapter" + strconv.Itoa(n+1)
+		files = append(files,
+			EpubFile{
+				Title: ch[0],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+	}
+	return map[string][]EpubFile{
+		url: EpubAddExtra(
+			"Travis Translations",
+			url, seriesTitle,
+			files),
+	}
+}
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -965,6 +1121,8 @@ func main() {
 			files = ShalvationEpubFiles(u)
 		case strings.Contains(u, "baka-tsuki.org"):
 			files = BakatsukiEpubFiles(u)
+		case strings.Contains(u, "travistranslations.com/novel/"):
+			files = TravisEpubFiles(u)
 		}
 		for uu, ef := range files {
 			f := EpubFileName(uu)
@@ -976,7 +1134,7 @@ func main() {
 
 // Local Variables:
 // compile-command: "go run ln2epub.go"
-// outline-regexp: "// \\(\\*+\\) "
+// outline-regexp: "// \\(\\*+\\)\\|^func \\|^type "
 // eval: (outline-minor-mode)
 // eval: (reveal-mode)
 // End:
