@@ -8,7 +8,7 @@ import (
 	// "golang.org/x/net/proxy"
 	"io/ioutil"
 	"net/http"
-	// nurl "net/url"
+	nurl "net/url"
 	"os"
 	"path"
 	"regexp"
@@ -450,6 +450,15 @@ func AddCoverImage(url string, files []EpubFile) []EpubFile {
 			Content: cfile.Bytes(),
 		})
 	return files
+}
+
+// Return the tag name of S or "" if nil.
+func SoupTag(s soup.Root) string {
+	if s.Pointer != nil {
+		return s.Pointer.Data
+	} else {
+		return ""
+	}
 }
 
 // * Soafp
@@ -1205,6 +1214,133 @@ func KequeenEpubFiles(url string) map[string][]EpubFile {
 	}
 }
 
+// * NeoSekai Translations
+var NeoSekaiAjaxUrl string = "https://www.neosekaitranslations.com/wp-admin/admin-ajax.php"
+
+// Return the series title for the series soup SUP.
+func NeoSekaiGetSeriesTitle(sup soup.Root) string {
+	if div := sup.Find("div", "class", "post-title"); div.Pointer != nil {
+		return strings.TrimSpace(div.Find("h1").Text())
+	}
+
+	return strings.TrimSuffix(
+		strings.TrimSpace(sup.Find("title").Text()),
+		"- NeoSekai Translations")
+
+}
+
+// Return a list of [ URL, CHAPTERNAME ] for the series soup SUP.
+func NeoSekaiGetChapters(sup soup.Root) [][]string {
+	id := sup.Find("div", "id", "manga-chapters-holder").Attrs()["data-id"]
+
+	pdata := nurl.Values{}
+	pdata.Set("action", "manga_get_chapters")
+	pdata.Add("manga", id)
+
+	resp, err := http.PostForm(NeoSekaiAjaxUrl, pdata)
+	if err != nil {
+		return [][]string{}
+	}
+
+	req, _ := ioutil.ReadAll(resp.Body)
+
+	sup = soup.HTMLParse(string(req))
+	var ret [][]string
+	for _, li := range sup.FindAll("li", "class", "wp-manga-chapter") {
+		a := li.Find("a")
+		ret = append([][]string{
+			[]string{
+				a.Attrs()["href"],
+				strings.TrimSpace(a.Text()),
+			}}, ret...)
+	}
+
+	return ret
+}
+
+// Return contents for chapter URL, title CHAPTERTITLE, and chapter no. N.
+func NeoSekaiGetChapter(url, chapterTitle string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	// Write the preamble.
+	ret.WriteString(EpubContentPreamble(chapterTitle))
+
+	s := soup.HTMLParse(h)
+	div := s.Find("div", "class", "reading-content")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if SoupTag(c) == "input" {
+			continue
+		} else if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the cover image url for the series soup SUP.
+func NeoSekaiGetCoverUrl(sup soup.Root) string {
+	if div := sup.Find("div", "class", "summary_image"); SoupTag(div) != "" {
+		return div.Find("img").Attrs()["data-src"]
+	}
+	return ""
+}
+
+// Return the files for the series url URL.
+func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	chapters := NeoSekaiGetChapters(sup)
+	seriesTitle := NeoSekaiGetSeriesTitle(sup)
+	var files []EpubFile
+
+	cover := NeoSekaiGetCoverUrl(sup)
+	if cover != "" {
+		fmt.Println("Fetching cover image")
+		files = AddCoverImage(cover, files)
+	}
+
+	n := 1
+	for _, ch := range chapters {
+		fmt.Println("Fetching", ch[1])
+		content, extra := NeoSekaiGetChapter(ch[0], ch[1], n+1)
+		cid := "Chapter" + strconv.Itoa(n+1)
+		files = append(files,
+			EpubFile{
+				Title: ch[1],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+		n++
+	}
+	return map[string][]EpubFile{
+		seriesTitle: EpubAddExtra(
+			"NeoSekai Translations",
+			url, seriesTitle, files),
+	}
+}
+
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1224,7 +1360,10 @@ func main() {
 			files = TravisEpubFiles(u)
 		case strings.Contains(u, "kequeentls.com"):
 			files = KequeenEpubFiles(u)
+		case strings.Contains(u, "neosekaitranslations.com"):
+			files = NeoSekaiEpubFiles(u)
 		}
+
 		for uu, ef := range files {
 			f := EpubFileName(uu)
 			EpubCreateFile(f, ef)
@@ -1235,7 +1374,7 @@ func main() {
 
 // Local Variables:
 // compile-command: "go run ln2epub.go"
-// outline-regexp: "// \\(\\*+\\)\\|^func \\|^type "
+// outline-regexp: "// \\(\\*+\\) \\|^func \\|^type "
 // eval: (outline-minor-mode)
 // eval: (reveal-mode)
 // End:
