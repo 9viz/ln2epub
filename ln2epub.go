@@ -1,3 +1,5 @@
+// Scrape LN TL sites and convert to Epub.
+// Licensed under BSD 2-Clause License.
 package main
 
 import (
