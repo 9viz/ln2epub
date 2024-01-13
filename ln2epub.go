@@ -1335,7 +1335,7 @@ func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
 	n := 1
 	for _, ch := range chapters {
 		fmt.Println("Fetching", ch[1])
-		content, extra := NeoSekaiGetChapter(ch[0], ch[1], n+1)
+		content, extra := NeoSekaiGetChapter(ch[0], ch[1], n)
 		cid := "Chapter" + strconv.Itoa(n+1)
 		files = append(files,
 			EpubFile{
