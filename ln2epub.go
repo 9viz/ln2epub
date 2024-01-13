@@ -1355,6 +1355,96 @@ func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
 	}
 }
 
+// * American Faux
+// Return the series title for the series soup SUP.
+func AmericanFauxGetSeriesTitle(sup soup.Root) string {
+	return strings.TrimSpace(
+		sup.Find("h1", "class", "entry-title").Text())
+}
+
+// Return chapter list [ TITLE, URL ] for the series soup SUP.
+func AmericanFauxGetChapters(sup soup.Root) [][]string {
+	var ret [][]string
+
+	for _, a := range sup.FindAll("a", "data-type", "post") {
+		ret = append(ret, []string{a.Attrs()["href"], a.Text()})
+	}
+
+	return ret
+}
+
+// Return content for chapter URL with TITLE and chapter no. N.
+func AmericanFauxGetChapter(url, title string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	// Write the preamble.
+	ret.WriteString(EpubContentPreamble(title))
+
+	s := soup.HTMLParse(h)
+	div := s.Find("div", "class", "entry-content")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else if SoupTag(c) == "div" &&
+			strings.HasPrefix(c.Attrs()["id"], "waldo-tag") {
+			continue
+		} else if SoupTag(c) == "hr" &&
+			HtmlValueContains("wp-block-separator",
+				c.Attrs()["class"]) {
+			break
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the series url URL.
+func AmericanFauxEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	chapters := AmericanFauxGetChapters(sup)
+	seriesTitle := AmericanFauxGetSeriesTitle(sup)
+	var files []EpubFile
+
+	n := 1
+	for _, ch := range chapters {
+		fmt.Println("Fetching", ch[1])
+		content, extra := AmericanFauxGetChapter(ch[0], ch[1], n)
+		cid := "Chapter" + strconv.Itoa(n+1)
+		files = append(files,
+			EpubFile{
+				Title: ch[1],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+		n++
+	}
+	return map[string][]EpubFile{
+		seriesTitle: EpubAddExtra(
+			"American Faux",
+			url, seriesTitle, files),
+	}
+}
 
 func main() {
 	if len(os.Args) == 1 {
@@ -1377,6 +1467,8 @@ func main() {
 			files = KequeenEpubFiles(u)
 		case strings.Contains(u, "neosekaitranslations.com"):
 			files = NeoSekaiEpubFiles(u)
+		case strings.Contains(u, "americanfaux.com"):
+			files = AmericanFauxEpubFiles(u)
 		}
 
 		for uu, ef := range files {
