@@ -304,10 +304,19 @@ var RHEADERS map[string][]string = map[string][]string{
 	"User-Agent": {"Chrome/96.0.4664.110"},
 }
 
-// Make a GET request for URL.
-func fetch(url string) ([]byte, error) {
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header = RHEADERS
+// Make a GET/POST request for URL.
+func fetch(url string, postform nurl.Values) ([]byte, error) {
+	var req *http.Request
+	if postform == nil {
+		req, _ = http.NewRequest("GET", url, nil)
+		req.Header = RHEADERS
+	} else {
+		req, _ = http.NewRequest("POST", url,
+			strings.NewReader(postform.Encode()))
+		req.Header = RHEADERS
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	}
+
 	// proxyURL, err := nurl.Parse("socks5://127.0.0.1:9050")
 	// dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
 	// if err != nil {
@@ -329,14 +338,20 @@ func fetch(url string) ([]byte, error) {
 // Make a GET request for URL.
 // The response body and error, if any, are returned.
 func Request(url string) (string, error) {
-	b, e := fetch(url)
+	b, e := fetch(url, nil)
+	return string(b), e
+}
+
+// Make a POST rqeuest for URL with form POSTFORM.
+func PostForm(url string, postform nurl.Values) (string, error) {
+	b, e := fetch(url, postform)
 	return string(b), e
 }
 
 // Fetch the image from url URL.
 // Return the image file contents, image mimetype.
 func FetchImage(url string) ([]byte, string) {
-	img, _ := fetch(url)
+	img, _ := fetch(url, nil)
 	return img, http.DetectContentType(img)
 }
 
@@ -1239,14 +1254,12 @@ func NeoSekaiGetChapters(sup soup.Root) [][]string {
 	pdata.Set("action", "manga_get_chapters")
 	pdata.Add("manga", id)
 
-	resp, err := http.PostForm(NeoSekaiAjaxUrl, pdata)
+	req, err := PostForm(NeoSekaiAjaxUrl, pdata)
 	if err != nil {
 		return [][]string{}
 	}
 
-	req, _ := ioutil.ReadAll(resp.Body)
-
-	sup = soup.HTMLParse(string(req))
+	sup = soup.HTMLParse(req)
 	var ret [][]string
 	for _, li := range sup.FindAll("li", "class", "wp-manga-chapter") {
 		a := li.Find("a")
