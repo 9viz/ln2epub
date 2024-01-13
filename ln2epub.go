@@ -1283,7 +1283,6 @@ func NeoSekaiGetChapter(url, chapterTitle string, n int) ([]byte, []EpubFile) {
 		panic(err)
 	}
 
-	// Write the preamble.
 	ret.WriteString(EpubContentPreamble(chapterTitle))
 
 	s := soup.HTMLParse(h)
@@ -1383,7 +1382,6 @@ func AmericanFauxGetChapter(url, title string, n int) ([]byte, []EpubFile) {
 		panic(err)
 	}
 
-	// Write the preamble.
 	ret.WriteString(EpubContentPreamble(title))
 
 	s := soup.HTMLParse(h)
