@@ -1444,6 +1444,90 @@ func AmericanFauxEpubFiles(url string) map[string][]EpubFile {
 	}
 }
 
+// * My fiancé is in love with my little sister
+// Site: http://hermitranslation.blogspot.com/p/index.html
+var FianceChapterRe = regexp.MustCompile(`chapter-?[0-9]+(_[0-9]+)?\.html$`)
+
+func FianceChapters(url string) [][]string {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	var ret [][]string
+	n := 1
+	for _, a := range sup.Find("div", "class", "post").FindAll("a") {
+		u := a.Attrs()["href"]
+		if FianceChapterRe.MatchString(u) {
+			ret = append(ret,
+				[]string{u, "Chapter " + strconv.Itoa(n)})
+			n++
+		}
+	}
+
+	return ret
+}
+
+// Return contents for chapter url URL with TITLE and chapter no. N.
+func FianceChapter(url, title string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	ret.WriteString(EpubContentPreamble(title))
+
+	s := soup.HTMLParse(h)
+	div := s.Find("div", "class", "post-body")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the series url URL.
+func FianceEpubFiles(url string) map[string][]EpubFile {
+	chapters := FianceChapters(url)
+	seriesTitle := "My fiancé is in love with my little sister"
+	var files []EpubFile
+
+	n := 1
+	for _, ch := range chapters {
+		fmt.Println("Fetching", ch[1])
+		content, extra := FianceChapter(ch[0], ch[1], n)
+		cid := "Chapter" + strconv.Itoa(n+1)
+		files = append(files,
+			EpubFile{
+				Title: ch[1],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+		n++
+	}
+	return map[string][]EpubFile{
+		seriesTitle: EpubAddExtra(
+			"Nocta's Hermit Den",
+			url, seriesTitle, files),
+	}
+}
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1467,6 +1551,8 @@ func main() {
 			files = NeoSekaiEpubFiles(u)
 		case strings.Contains(u, "americanfaux.com"):
 			files = AmericanFauxEpubFiles(u)
+		case strings.Contains(u, "hermitranslation.blogspot.com"):
+			files = FianceEpubFiles(u)
 		}
 
 		for uu, ef := range files {
