@@ -485,7 +485,7 @@ func SoupTag(s soup.Root) string {
 var SoapcleanChNameRe = regexp.MustCompile(`([[:space:]]+:[[:space:]]+)`)
 
 // Return the series title with URL URL.
-func SoafpGetSeriesTitle(url string) string {
+func SoafpSeriesTitle(url string) string {
 	h, err := Request(url)
 	if err != nil {
 		panic(err)
@@ -501,7 +501,7 @@ func SoafpcleanChapterName(chaptername string) string {
 }
 
 // Return a list of [ URL, CHAPTERNAME ] for the series in URL.
-func SoafpGetChapters(url string) [][]string {
+func SoafpChapters(url string) [][]string {
 	h, err := Request(url)
 	if err != nil {
 		panic(err)
@@ -566,7 +566,7 @@ func SoafpstripChapterNo(chaptername string) string {
 // If the chapter has extra files, then it is returned as the second
 // argument.
 // TODO: Replace all images like in the rest.
-func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+func SoafpChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
 	var extra []EpubFile
 
@@ -643,11 +643,11 @@ func SoafpGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 // Return the list of EpubFile for the series in URL.
 func SoafpEpubFiles(url string) map[string][]EpubFile {
 	var files []EpubFile
-	chs := SoafpGetChapters(url)
+	chs := SoafpChapters(url)
 
 	for n, ch := range chs {
 		fmt.Println("Fetching chapter", ch[0])
-		content, extra := SoafpGetChapter(ch[0], ch[1], n)
+		content, extra := SoafpChapter(ch[0], ch[1], n)
 		files = append(
 			files,
 			EpubFile{
@@ -660,7 +660,7 @@ func SoafpEpubFiles(url string) map[string][]EpubFile {
 		files = append(files, extra...)
 	}
 
-	title := SoafpGetSeriesTitle(url)
+	title := SoafpSeriesTitle(url)
 	return map[string][]EpubFile{
 		url: EpubAddExtra("", title, title, files),
 	}
@@ -669,7 +669,7 @@ func SoafpEpubFiles(url string) map[string][]EpubFile {
 // * Shalvation Translations
 
 // Get the author of the series with TOC page soup SP.
-func ShalvationGetAuthor(sp soup.Root) string {
+func ShalvationAuthor(sp soup.Root) string {
 	// The first <string> tag is for the author.
 	strong := sp.Find("div", "class", "entry-content").Find("strong")
 	// Needs to be HTML().  Text() and FullText() both return an
@@ -678,13 +678,13 @@ func ShalvationGetAuthor(sp soup.Root) string {
 }
 
 // Return the cover image URL of the series with TOC page soup SP.
-func ShalvationGetCoverImg(sp soup.Root) string {
+func ShalvationCoverImg(sp soup.Root) string {
 	return sp.Find("div", "class", "entry-content").Find("img").Attrs()["src"]
 }
 
 // Return the synposis HTML for the series with TOC page soup SP.
 // An empty string is returned if there is none.
-func ShalvationGetSynopsis(sp soup.Root) string {
+func ShalvationSynopsis(sp soup.Root) string {
 	var h strings.Builder
 	synp := sp.Find("div", "class", "entry-content").Find("h4")
 	// First check if it is a synposis heading.
@@ -731,7 +731,7 @@ func ShalvationvolLinks(sp soup.Root) [][]string {
 // Return links for each chapter in every volume for TOC page soup SP.
 // A map is written where key is the name of the volume, and value is
 // a list of [ CHAPTERNAME, CHAPTERURL ].
-func ShalvationGetVols(sp soup.Root) map[string][][]string {
+func ShalvationVols(sp soup.Root) map[string][][]string {
 	vols := make(map[string][][]string)
 	div := sp.Find("div", "class", "entry-content")
 
@@ -758,7 +758,7 @@ func ShalvationstripChapterNo(chaptername string) string {
 // Return content for chapter URL with CHAPTERNAME, chapter no. N.
 // If the chapter has images, then it is returned as the second
 // argument.
-func ShalvationGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+func ShalvationChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	var content bytes.Buffer
 	var extra []EpubFile
 
@@ -819,7 +819,7 @@ func ShalvationprepVol(links [][]string) []EpubFile {
 			files = AddCoverImage(l[1], files)
 		case "Illustrations":
 			fmt.Println("Fetching illustrations...")
-			f, e := ShalvationGetChapter(l[1], "Illustrations", -1)
+			f, e := ShalvationChapter(l[1], "Illustrations", -1)
 			files = append(files, e...)
 			files = append(files,
 				EpubFile{
@@ -832,7 +832,7 @@ func ShalvationprepVol(links [][]string) []EpubFile {
 		default:
 			fmt.Println("Fetching", l[0])
 			cid := "Chapter" + strconv.Itoa(n)
-			f, e := ShalvationGetChapter(l[1], l[0], n)
+			f, e := ShalvationChapter(l[1], l[0], n)
 			files = append(files, e...)
 			files = append(files,
 				EpubFile{
@@ -851,7 +851,7 @@ func ShalvationprepVol(links [][]string) []EpubFile {
 var ShalvationtitleRe = regexp.MustCompile(` Table[\s\p{Zs}][oO]f[\s\p{Zs}]Contents$`)
 
 // Return the title for the series TOC soup SP.
-func ShalvationGetTitle(sp soup.Root) string {
+func ShalvationTitle(sp soup.Root) string {
 	title := sp.Find("h1", "class", "entry-title")
 	return ShalvationtitleRe.ReplaceAllString(title.Text(), "")
 }
@@ -866,9 +866,9 @@ func ShalvationEpubFiles(url string) map[string][]EpubFile {
 	ret := make(map[string][]EpubFile)
 
 	sp := soup.HTMLParse(h)
-	vols := ShalvationGetVols(sp)
-	author := ShalvationGetAuthor(sp)
-	title := ShalvationGetTitle(sp)
+	vols := ShalvationVols(sp)
+	author := ShalvationAuthor(sp)
+	title := ShalvationTitle(sp)
 
 	for vol, links := range vols {
 		files := ShalvationprepVol(links)
@@ -887,7 +887,7 @@ func ShalvationEpubFiles(url string) map[string][]EpubFile {
 // Return link to all the volumes in URL URL.
 // Returned is a list of [ TITLE, LINK ] where TITLE is the title of
 // the volume, and LINK is the link to the volume full text.
-func BakatsukiGetVolumes(url string) [][]string {
+func BakatsukiVolumes(url string) [][]string {
 	var ret [][]string
 	h, err := Request(url)
 	if err != nil {
@@ -969,7 +969,7 @@ func BakatsukiPrepVol(url string) []EpubFile {
 // Return EpubFiles for each volume in series URL URL.
 func BakatsukiEpubFiles(url string) map[string][]EpubFile {
 	ret := make(map[string][]EpubFile)
-	vols := BakatsukiGetVolumes(url)
+	vols := BakatsukiVolumes(url)
 
 	for _, vol := range vols {
 		fmt.Println("Fetching", vol[1])
@@ -987,7 +987,7 @@ func BakatsukiEpubFiles(url string) map[string][]EpubFile {
 // * Travis Translations
 // Fetch chapter links from series soup SUP.
 // A list of [ CHAPTER-NAME, URL ] is returned.
-func TravisGetChapters(sup soup.Root) [][]string {
+func TravisChapters(sup soup.Root) [][]string {
 	var div soup.Root
 	// For some reason sup.Find() does not work!
 	for  _, div =  range sup.FindAll("div") {
@@ -1017,7 +1017,7 @@ func TravisGetChapters(sup soup.Root) [][]string {
 // Return content for URL with name CHAPTERNAME, chapter no. N.
 // If any extra files are to be attached, then it is returned as the
 // second item.
-func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+func TravisChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	h, err := Request(url)
 	if err != nil {
 		panic(err)
@@ -1064,7 +1064,7 @@ func TravisGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 }
 
 // Return the series title for series soup SUP.
-func TravisGetSeriesTitle(sup soup.Root) string {
+func TravisSeriesTitle(sup soup.Root) string {
 	div := sup.Find("div", "id", "series-header")
 	if div.Pointer == nil {
 		return "***UNKNOWN***"
@@ -1080,13 +1080,13 @@ func TravisEpubFiles(url string) map[string][]EpubFile {
 	}
 	sup := soup.HTMLParse(h)
 
-	chapters := TravisGetChapters(sup)
-	seriesTitle := TravisGetSeriesTitle(sup)
+	chapters := TravisChapters(sup)
+	seriesTitle := TravisSeriesTitle(sup)
 
 	var files []EpubFile
 	for n, ch := range chapters {
 		fmt.Println("Fetching", ch[1])
-		content, extra := TravisGetChapter(ch[1], ch[0], n+1)
+		content, extra := TravisChapter(ch[1], ch[0], n+1)
 		cid := "Chapter" + strconv.Itoa(n+1)
 		files = append(files,
 			EpubFile{
@@ -1110,7 +1110,7 @@ func TravisEpubFiles(url string) map[string][]EpubFile {
 // Return list of chapter names in volume soup SUP.
 // A list of [ NAME, CURL ] where NAME is chapter name with URL CURL.
 // The cover link is returned with NAME being "cover"
-func KequeenGetChapters(sup soup.Root) [][]string {
+func KequeenChapters(sup soup.Root) [][]string {
 	var chs [][]string
 
 	for _, img := range sup.Find("main", "id", "main").FindAll("img") {
@@ -1130,7 +1130,7 @@ func KequeenGetChapters(sup soup.Root) [][]string {
 
 // Return chapter content, and extra files for chapter URL URL.
 // Chapter name is given by CHAPTERNAME, and chapter no. by N.
-func KequeenGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
+func KequeenChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 	h, err := Request(url)
 	if err != nil {
 		panic(err)
@@ -1181,7 +1181,7 @@ func KequeenGetChapter(url, chaptername string, n int) ([]byte, []EpubFile) {
 }
 
 // Return the page title for volume/series with soup SUP.
-func KequeenGetSeriesTitle(sup soup.Root) string {
+func KequeenSeriesTitle(sup soup.Root) string {
 	title := sup.Find("head").Find("title")
 	if title.Pointer == nil {
 		return "***UNKNOWN***"
@@ -1198,8 +1198,8 @@ func KequeenEpubFiles(url string) map[string][]EpubFile {
 	}
 	sup := soup.HTMLParse(h)
 
-	chapters := KequeenGetChapters(sup)
-	seriesTitle := KequeenGetSeriesTitle(sup)
+	chapters := KequeenChapters(sup)
+	seriesTitle := KequeenSeriesTitle(sup)
 
 	var files []EpubFile
 	n := 1
@@ -1210,7 +1210,7 @@ func KequeenEpubFiles(url string) map[string][]EpubFile {
 			continue
 		}
 		fmt.Println("Fetching", ch[1])
-		content, extra := KequeenGetChapter(ch[1], ch[0], n+1)
+		content, extra := KequeenChapter(ch[1], ch[0], n+1)
 		cid := "Chapter" + strconv.Itoa(n+1)
 		files = append(files,
 			EpubFile{
@@ -1235,7 +1235,7 @@ func KequeenEpubFiles(url string) map[string][]EpubFile {
 var NeoSekaiAjaxUrl string = "https://www.neosekaitranslations.com/wp-admin/admin-ajax.php"
 
 // Return the series title for the series soup SUP.
-func NeoSekaiGetSeriesTitle(sup soup.Root) string {
+func NeoSekaiSeriesTitle(sup soup.Root) string {
 	if div := sup.Find("div", "class", "post-title"); div.Pointer != nil {
 		return strings.TrimSpace(div.Find("h1").Text())
 	}
@@ -1247,7 +1247,7 @@ func NeoSekaiGetSeriesTitle(sup soup.Root) string {
 }
 
 // Return a list of [ URL, CHAPTERNAME ] for the series soup SUP.
-func NeoSekaiGetChapters(sup soup.Root) [][]string {
+func NeoSekaiChapters(sup soup.Root) [][]string {
 	id := sup.Find("div", "id", "manga-chapters-holder").Attrs()["data-id"]
 
 	pdata := nurl.Values{}
@@ -1274,7 +1274,7 @@ func NeoSekaiGetChapters(sup soup.Root) [][]string {
 }
 
 // Return contents for chapter URL, title CHAPTERTITLE, and chapter no. N.
-func NeoSekaiGetChapter(url, chapterTitle string, n int) ([]byte, []EpubFile) {
+func NeoSekaiChapter(url, chapterTitle string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
 	var extra []EpubFile
 
@@ -1306,7 +1306,7 @@ func NeoSekaiGetChapter(url, chapterTitle string, n int) ([]byte, []EpubFile) {
 }
 
 // Return the cover image url for the series soup SUP.
-func NeoSekaiGetCoverUrl(sup soup.Root) string {
+func NeoSekaiCoverUrl(sup soup.Root) string {
 	if div := sup.Find("div", "class", "summary_image"); SoupTag(div) != "" {
 		return div.Find("img").Attrs()["data-src"]
 	}
@@ -1321,11 +1321,11 @@ func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
 	}
 	sup := soup.HTMLParse(h)
 
-	chapters := NeoSekaiGetChapters(sup)
-	seriesTitle := NeoSekaiGetSeriesTitle(sup)
+	chapters := NeoSekaiChapters(sup)
+	seriesTitle := NeoSekaiSeriesTitle(sup)
 	var files []EpubFile
 
-	cover := NeoSekaiGetCoverUrl(sup)
+	cover := NeoSekaiCoverUrl(sup)
 	if cover != "" {
 		fmt.Println("Fetching cover image")
 		files = AddCoverImage(cover, files)
@@ -1334,7 +1334,7 @@ func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
 	n := 1
 	for _, ch := range chapters {
 		fmt.Println("Fetching", ch[1])
-		content, extra := NeoSekaiGetChapter(ch[0], ch[1], n)
+		content, extra := NeoSekaiChapter(ch[0], ch[1], n)
 		cid := "Chapter" + strconv.Itoa(n+1)
 		files = append(files,
 			EpubFile{
@@ -1356,13 +1356,13 @@ func NeoSekaiEpubFiles(url string) map[string][]EpubFile {
 
 // * American Faux
 // Return the series title for the series soup SUP.
-func AmericanFauxGetSeriesTitle(sup soup.Root) string {
+func AmericanFauxSeriesTitle(sup soup.Root) string {
 	return strings.TrimSpace(
 		sup.Find("h1", "class", "entry-title").Text())
 }
 
 // Return chapter list [ TITLE, URL ] for the series soup SUP.
-func AmericanFauxGetChapters(sup soup.Root) [][]string {
+func AmericanFauxChapters(sup soup.Root) [][]string {
 	var ret [][]string
 
 	for _, a := range sup.FindAll("a", "data-type", "post") {
@@ -1373,7 +1373,7 @@ func AmericanFauxGetChapters(sup soup.Root) [][]string {
 }
 
 // Return content for chapter URL with TITLE and chapter no. N.
-func AmericanFauxGetChapter(url, title string, n int) ([]byte, []EpubFile) {
+func AmericanFauxChapter(url, title string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
 	var extra []EpubFile
 
@@ -1417,14 +1417,14 @@ func AmericanFauxEpubFiles(url string) map[string][]EpubFile {
 	}
 	sup := soup.HTMLParse(h)
 
-	chapters := AmericanFauxGetChapters(sup)
-	seriesTitle := AmericanFauxGetSeriesTitle(sup)
+	chapters := AmericanFauxChapters(sup)
+	seriesTitle := AmericanFauxSeriesTitle(sup)
 	var files []EpubFile
 
 	n := 1
 	for _, ch := range chapters {
 		fmt.Println("Fetching", ch[1])
-		content, extra := AmericanFauxGetChapter(ch[0], ch[1], n)
+		content, extra := AmericanFauxChapter(ch[0], ch[1], n)
 		cid := "Chapter" + strconv.Itoa(n+1)
 		files = append(files,
 			EpubFile{
