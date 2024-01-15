@@ -1528,6 +1528,194 @@ func FianceEpubFiles(url string) map[string][]EpubFile {
 	}
 }
 
+// * Apprentice Translations
+// Return the series title for the soup SUP.
+func ApprenticeSeriesTitle(sup soup.Root) string {
+	return strings.TrimSpace(
+		sup.Find("h1", "class", "entry-title").Text())
+}
+
+var ApprenticeOldUrlRe = regexp.MustCompile(`https://apprenticetranslations.com/`)
+// Return [ URL, TITLE ] for the series soup SUP.
+func ApprenticeChapters(sup soup.Root) [][]string {
+	div := sup.Find("div", "class", "entry-content")
+
+	var ret [][]string
+	for _, a := range div.FindAll("a") {
+		u := a.Attrs()["href"]
+		if strings.Contains(u, "/?share=") || u == "" {
+			continue
+		}
+		u = ApprenticeOldUrlRe.ReplaceAllString(u, "https://apprenticetranslations.wordpress.com/")
+		ret = append(ret, []string{u, strings.TrimSpace(a.Text())})
+	}
+
+	return ret
+}
+
+var ApprenticeChButtonRe = regexp.MustCompile(`(Previous Chapter)?.*(Next Chapter)?`)
+
+// Return contents for chapter url URL with TITLE and chapter no. N.
+func ApprenticeChapter(url, title string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	ret.WriteString(EpubContentPreamble(title))
+
+	s := soup.HTMLParse(h)
+	div := s.Find("div", "class", "entry-content")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else if a := c.FindAll("a"); len(a) != 0 {
+			break
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the series url URL.
+func ApprenticeEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	chapters := ApprenticeChapters(sup)
+	seriesTitle := ApprenticeSeriesTitle(sup)
+	var files []EpubFile
+
+	n := 1
+	for _, ch := range chapters {
+		fmt.Println("Fetching", ch[1])
+		content, extra := ApprenticeChapter(ch[0], ch[1], n)
+		cid := "Chapter" + strconv.Itoa(n)
+		files = append(files,
+			EpubFile{
+				Title: ch[1],
+				Id: cid,
+				Filename: "OEBPS/Text/" + cid + ".xhtml",
+				Mimetype: "application/xhtml+xml",
+				Content: content,
+			})
+		files = append(files, extra...)
+		n++
+	}
+	return map[string][]EpubFile{
+		seriesTitle: EpubAddExtra(
+			"Apprentice Translations",
+			url, seriesTitle, files),
+	}
+}
+
+// * Violet Evergarden
+// Index: https://dennou-translations.tumblr.com/post/159331691639/violet-evergarden-novel-index
+
+// Return a map of volume with key being [ URL, TITLE ] for the chapter.
+// URL is the index url.
+func VioletEvergardenVolumes(url string) map[string][][]string {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	ret := make(map[string][][]string)
+	for _, h2 := range sup.Find("article", "class", "post").FindAll("h2") {
+		title := strings.TrimSpace(h2.Text())
+		var chps [][]string
+		for _, a := range h2.FindNextSibling().FindAll("a") {
+			chps = append(chps, []string{
+				a.Attrs()["href"],
+				strings.TrimSpace(a.Text())})
+		}
+		ret[title] = chps
+	}
+
+	return ret
+}
+
+// Return content for chapter URL with TITLE and chapter no. N.
+func VioletEvergardenChapter(url, title string, n int) ([]byte, []EpubFile) {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	ret.WriteString(EpubContentPreamble(title))
+
+	var div soup.Root
+	if strings.Contains(url, "x0401x.tumblr.com") {
+		div = sup.Find("div", "class", "container")
+		if div.Pointer == nil {
+			div = sup.Find("div", "class", "posts")
+		}
+	} else {
+		div = sup.Find("article", "class", "post")
+	}
+
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else if SoupTag(c) == "div" && c.Attrs()["class"] == "tagged_post" {
+			break
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the index url URL.
+func VioletEvergardenEpubFiles(url string) map[string][]EpubFile {
+	ret := make(map[string][]EpubFile)
+	vols := VioletEvergardenVolumes(url)
+	for v, c := range vols {
+		var files []EpubFile
+		for n, ch := range c {
+			fmt.Println("Fetching", ch[0])
+			content, extra := VioletEvergardenChapter(ch[0], ch[1], n+1)
+			cid := "Chapter" + strconv.Itoa(n+1)
+			files = append(files,
+				EpubFile{
+					Title: ch[1],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: content,
+				})
+			files = append(files, extra...)
+		}
+		ret[v] = EpubAddExtra("Dennou Translations",
+			url, "Violet Evergarden - " + v, files)
+	}
+	return ret
+}
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1553,6 +1741,10 @@ func main() {
 			files = AmericanFauxEpubFiles(u)
 		case strings.Contains(u, "hermitranslation.blogspot.com"):
 			files = FianceEpubFiles(u)
+		case strings.Contains(u, "apprenticetranslations.wordpress.com"):
+			files = ApprenticeEpubFiles(u)
+		case strings.Contains(u, "violet-evergarden-novel-index"):
+			files = VioletEvergardenEpubFiles(u)
 		}
 
 		for uu, ef := range files {
