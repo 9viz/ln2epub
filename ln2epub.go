@@ -1795,18 +1795,32 @@ func CClawChapter(url, title string, n int) ([]byte, []EpubFile) {
 
 	ret.WriteString(EpubContentPreamble(title))
 	imgCounter := 1
-	for c := sup.Find("h2", "class", "wp-block-heading"); c.Pointer != nil; c = c.FindNextSibling() {
+	do := func(c soup.Root) bool {
 		if imgs := c.FindAll("img"); len(imgs) != 0 {
 			var html string
 			html, imgCounter, extra = ReplaceImgTags(
 				c.HTML(), imgs, imgCounter, n, extra)
 			ret.WriteString(html)
 		} else if SoupTag(c) == "span" && HtmlValueContains("wordads-inline-marker", c.Attrs()["id"]) {
-			break
-		}  else if SoupTag(c) == "div" && strings.HasPrefix(c.Attrs()["id"], "atatags-") {
-			break
+			return false
+		} else if SoupTag(c) == "div" && strings.HasPrefix(c.Attrs()["id"], "atatags-") {
+			return false
 		} else {
 			ret.WriteString(c.HTML())
+		}
+		return false
+	}
+	if c := sup.Find("h2", "class", "wp-block-heading"); c.Pointer != nil {
+		for c = c; c.Pointer != nil; c = c.FindNextSibling() {
+			if !do(c) {
+				break
+			}
+		}
+	} else {
+		for _, c := range sup.Find("div", "class", "entry-content").Children() {
+			if !do(c) {
+				break
+			}
 		}
 	}
 	ret.WriteString(EpubContentEnd())
