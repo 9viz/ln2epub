@@ -437,6 +437,7 @@ func ReplaceImgTags(html string, imgs []soup.Root, imgCounter, n int, addto []Ep
 		html = strings.ReplaceAll(html,
 			img.HTML(),
 			imgBuf.String())
+		imgBuf.Reset()
 	}
 
 	return html, imgCounter, addto
