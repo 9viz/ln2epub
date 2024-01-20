@@ -1716,6 +1716,142 @@ func VioletEvergardenEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
+// * CClaw Translations
+var CClawTitleRe = regexp.MustCompile(` ToC - CClaw Translations`)
+
+// Return the title for the series soup SUP.
+func CClawSeriesTitle(sup soup.Root) string {
+	if h1 := sup.Find("h1", "class", "entry-title"); h1.Pointer != nil {
+		return strings.TrimSuffix(strings.TrimSpace(h1.Text()), " ToC")
+	} else {
+		return CClawTitleRe.ReplaceAllString(
+			strings.TrimSpace(sup.Find("title").Text()),
+			"")
+	}
+}
+
+// Return the cover URL for <img> with attrs A.
+func CClawcoverurl(a map[string]string) string {
+	if u, ok := a["data-large-file"]; ok {
+		return u
+	} else {
+		return a["src"]
+	}
+}
+
+// Return [ URL, TITLE ] for single volume TOC soup SUP.
+func CClawsingleVol(sup soup.Root) [][]string {
+	var ret [][]string
+	div := sup.Find("div", "class", "entry-content")
+
+	if img := div.Find("img"); img.Pointer != nil {
+		ret = append(ret, []string{CClawcoverurl(img.Attrs()), "cover"})
+	}
+
+	for _, a := range div.FindAll("a") {
+		if t := strings.TrimSpace(a.Text()); t != "" {
+			ret = append(ret, []string{a.Attrs()["href"], t})
+		}
+	}
+
+	return ret
+}
+
+// Return map of Volume -> [ URL, TITLE ] for series TOC soup SUP.
+func CClawVolumes(sup soup.Root) map[string][][]string {
+	ret := make(map[string][][]string)
+
+	div := sup.Find("div", "class", "entry-content")
+	if div.Find("h2").Pointer == nil {
+		ret[CClawSeriesTitle(sup)] = CClawsingleVol(sup)
+		return ret
+	}
+
+	imgs := div.FindAll("img")
+	for i, h2 := range div.FindAll("h2") {
+		chs := [][]string{[]string{CClawcoverurl(imgs[i].Attrs()), "cover"}}
+		var vol string
+		vol = strings.TrimSuffix(strings.TrimSpace(h2.Text()), " (Final)")
+		for c := h2.FindNextSibling(); c.Pointer != nil && SoupTag(c) != "h2"; c = c.FindNextSibling() {
+			if a := c.Find("a"); a.Pointer != nil && a.Text() != "" {
+				chs = append(chs, []string{a.Attrs()["href"], a.Text()})
+			}
+		}
+		ret[vol] = chs
+	}
+	return ret
+}
+
+// Return content for chapter URL with TITLE and chapter no. N.
+func CClawChapter(url, title string, n int) ([]byte, []EpubFile) {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	ret.WriteString(EpubContentPreamble(title))
+	imgCounter := 1
+	for c := sup.Find("h2", "class", "wp-block-heading"); c.Pointer != nil; c = c.FindNextSibling() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else if SoupTag(c) == "span" && HtmlValueContains("wordads-inline-marker", c.Attrs()["id"]) {
+			break
+		}  else if SoupTag(c) == "div" && strings.HasPrefix(c.Attrs()["id"], "atatags-") {
+			break
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the series TOC page URL URL.
+func CClawEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+	seriesTitle := CClawSeriesTitle(sup)
+
+	ret := make(map[string][]EpubFile)
+	vols := CClawVolumes(sup)
+	for v, c := range vols {
+		var files []EpubFile
+		n := 1
+		for _, ch := range c {
+			fmt.Println("Fetching", v, ch[1], ch[0])
+			if ch[1] == "cover" {
+				files = AddCoverImage(ch[0], files)
+				continue
+			}
+			content, extra := CClawChapter(ch[0], ch[1], n)
+			cid := "Chapter" + strconv.Itoa(n)
+			files = append(files,
+				EpubFile{
+					Title: ch[1],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: content,
+				})
+			files = append(files, extra...)
+			n++
+		}
+		ret[seriesTitle + " - " + v] = EpubAddExtra("CClaw Translations", c[0][0], seriesTitle + " - " + v, files)
+	}
+	return ret
+}
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1745,6 +1881,8 @@ func main() {
 			files = ApprenticeEpubFiles(u)
 		case strings.Contains(u, "violet-evergarden-novel-index"):
 			files = VioletEvergardenEpubFiles(u)
+		case strings.Contains(u, "cclawtranslations.home.blog/"):
+			files = CClawEpubFiles(u)
 		}
 
 		for uu, ef := range files {
