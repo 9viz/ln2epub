@@ -1809,7 +1809,7 @@ func CClawChapter(url, title string, n int) ([]byte, []EpubFile) {
 		} else {
 			ret.WriteString(c.HTML())
 		}
-		return false
+		return true
 	}
 	if c := sup.Find("h2", "class", "wp-block-heading"); c.Pointer != nil {
 		for c = c; c.Pointer != nil; c = c.FindNextSibling() {
