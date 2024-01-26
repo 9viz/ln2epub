@@ -1794,6 +1794,11 @@ func CClawChapter(url, title string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
 	var extra []EpubFile
 
+	h2 := sup.Find("h2", "class", "wp-block-heading")
+	if h2.Pointer != nil && strings.TrimSpace(h2.Text()) != title {
+		title = title + ": " + strings.TrimSpace(h2.Text())
+	}
+
 	ret.WriteString(EpubContentPreamble(title))
 	imgCounter := 1
 	do := func(c soup.Root) bool {
@@ -1811,8 +1816,8 @@ func CClawChapter(url, title string, n int) ([]byte, []EpubFile) {
 		}
 		return true
 	}
-	if c := sup.Find("h2", "class", "wp-block-heading"); c.Pointer != nil {
-		for c = c; c.Pointer != nil; c = c.FindNextSibling() {
+	if h2.Pointer != nil {
+		for c := h2; c.Pointer != nil; c = c.FindNextSibling() {
 			if !do(c) {
 				break
 			}
