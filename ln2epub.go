@@ -1882,7 +1882,7 @@ func StorySeedlingVolNo(title string) string {
 	return "Volume " + m[1]
 }
 
-var StorySeedlingChNameRe = regexp.MustCompile(`Vol\. [0-9]+ Chapter [0-9.]+ - (.*)`)
+var StorySeedlingChNameRe = regexp.MustCompile(`(?:Vol\. [0-9]+ )?Chapter [0-9.]+ - (.*)`)
 func StorySeedlingChName(title string) string {
 	m := StorySeedlingChNameRe.FindStringSubmatch(title)
 	if m == nil {
@@ -1899,14 +1899,7 @@ func StorySeedlingSeriesTitle(sup soup.Root) string {
 func StorySeedlingVolumes(url string, sup soup.Root) map[string][][]string {
 	ret := make(map[string][][]string)
 
-	// var sec soup.Root
-	// for _, i := range sup.FindAll("section") {
-	// 	if val, ok := i.Attrs()["x-data"]; ok &&
-	// 		strings.Contains(val, "'chapters'") {
-	// 		sec = i
-	// 		break
-	// 	}
-	// }
+	vol := ""
 
 	for _, a := range sup.FindAll("a") {
 		href := a.Attrs()["href"]
@@ -1919,10 +1912,10 @@ func StorySeedlingVolumes(url string, sup soup.Root) map[string][][]string {
 		}
 		t := strings.TrimSpace(text.Text())
 		if strings.HasPrefix(t, "Vol.") {
-			vol := StorySeedlingVolNo(t)
-			ch := StorySeedlingChName(t)
-			ret[vol] = append([][]string{{href,ch}}, ret[vol]...)
+			vol = StorySeedlingVolNo(t)
 		}
+		ch := StorySeedlingChName(t)
+		ret[vol] = append([][]string{{href,ch}}, ret[vol]...)
 	}
 
 	return ret
