@@ -1872,6 +1872,129 @@ func CClawEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
+// * Story Seedling
+var StorySeedlingVolNoRe = regexp.MustCompile(`Vol\. ([0-9]+) `)
+func StorySeedlingVolNo(title string) string {
+	m := StorySeedlingVolNoRe.FindStringSubmatch(title)
+	if m == nil {
+		return "unknown"
+	}
+	return "Volume " + m[1]
+}
+
+var StorySeedlingChNameRe = regexp.MustCompile(`Vol\. [0-9]+ Chapter [0-9.]+ - (.*)`)
+func StorySeedlingChName(title string) string {
+	m := StorySeedlingChNameRe.FindStringSubmatch(title)
+	if m == nil {
+		return "unknown"
+	}
+	return m[1]
+}
+
+func StorySeedlingSeriesTitle(sup soup.Root) string {
+	return strings.TrimSpace(sup.Find("h1").Text())
+}
+
+// Return a list of [ URL, CHAPTERNAME ] for TOC soup SUP with URL.
+func StorySeedlingVolumes(url string, sup soup.Root) map[string][][]string {
+	ret := make(map[string][][]string)
+
+	// var sec soup.Root
+	// for _, i := range sup.FindAll("section") {
+	// 	if val, ok := i.Attrs()["x-data"]; ok &&
+	// 		strings.Contains(val, "'chapters'") {
+	// 		sec = i
+	// 		break
+	// 	}
+	// }
+
+	for _, a := range sup.FindAll("a") {
+		href := a.Attrs()["href"]
+		if !strings.HasPrefix(href, url) {
+			continue
+		}
+		text := a.Find("div", "class", "truncate")
+		if text.Pointer == nil {
+			continue
+		}
+		t := strings.TrimSpace(text.Text())
+		if strings.HasPrefix(t, "Vol.") {
+			vol := StorySeedlingVolNo(t)
+			ch := StorySeedlingChName(t)
+			ret[vol] = append([][]string{{href,ch}}, ret[vol]...)
+		}
+	}
+
+	return ret
+}
+
+// Return content for chapter URL with TITLE and chapter no. N.
+func StorySeedlingChapter(url, title string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	ret.WriteString(EpubContentPreamble(title))
+
+	s := soup.HTMLParse(h)
+	div := SoupFindParent(s.Find("h1"), "div")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if SoupTag(c) == "h1" {
+			continue
+		} else if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+// Return the files for the series TOC page URL URL.
+func StorySeedlingEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+	seriesTitle := StorySeedlingSeriesTitle(sup)
+
+	ret := make(map[string][]EpubFile)
+	vols := StorySeedlingVolumes(url, sup)
+	for v, c := range vols {
+		var files []EpubFile
+		n := 1
+		for _, ch := range c {
+			fmt.Println("Fetching", v, ch[1], ch[0])
+			content, extra := StorySeedlingChapter(ch[0], ch[1], n)
+			cid := "Chapter" + strconv.Itoa(n)
+			files = append(files,
+				EpubFile{
+					Title: ch[1],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: content,
+				})
+			files = append(files, extra...)
+			n++
+		}
+		ret[seriesTitle + " - " + v] = EpubAddExtra("Story Seedling", c[0][0], seriesTitle + " - " + v, files)
+	}
+	return ret
+}
+
+
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Println(`usage: ln2epub URL...`)
@@ -1903,6 +2026,8 @@ func main() {
 			files = VioletEvergardenEpubFiles(u)
 		case strings.Contains(u, "cclawtranslations.home.blog/"):
 			files = CClawEpubFiles(u)
+		case strings.Contains(u, "storyseedling.com"):
+			files = StorySeedlingEpubFiles(u)
 		}
 
 		for uu, ef := range files {
