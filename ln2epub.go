@@ -55,6 +55,20 @@ func EpubstripOebpsPrefix(filename string) string {
 	return strings.TrimPrefix(filename, "OEBPS/")
 }
 
+func EpubescapeXml(str string) string {
+	escape := [][]string{
+		{"'", "&apos;"},
+		{"\"", "&quot;"},
+		{"<", "&lt;"},
+		{">", "&gt;"},
+		{"&", "&amp;"},
+	}
+	for _, e := range escape {
+		str = strings.ReplaceAll(str, e[0], e[1])
+	}
+	return str
+}
+
 // Return the file contents of the content.opf file for the series.
 // AUTHOR is the author of the series, TITLE is the name of the
 // series, IDENTIFIER is the value of unique-identifier for the
@@ -195,7 +209,7 @@ func EpubTocNcx(author, identifer, title string, files []EpubFile) []byte {
 		content.WriteString("'>\n")
 
 		content.WriteString("<navLabel><text>")
-		content.WriteString(i.Title)
+		content.WriteString(EpubescapeXml(i.Title))
 		content.WriteString("</text></navLabel>\n")
 		content.WriteString("<content src='")
 		content.WriteString(EpubstripOebpsPrefix(i.Filename))
@@ -220,7 +234,7 @@ func EpubContainerXml() []byte {
 
 // Return the file contents of the mimetype file.
 func EpubMimetype() []byte {
-	return []byte("application/epub+zip\n")
+	return []byte("application/epub+zip")
 }
 
 // Return the preamble for xhtml content files for chapter with TITLE.
@@ -1987,6 +2001,123 @@ func StorySeedlingEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
+// * SkyTheWood Translations
+// Return list of [ URL, CHNAME ] for each vol in TOC soup SUP.
+func SkythewoodVolumes(sup soup.Root) map[string][][]string {
+	div := sup.Find("div", "class", "columns-inner")
+
+	ret := make(map[string][][]string)
+	for _, i := range div.FindAll("b") {
+		if !strings.HasPrefix(i.FullText(), "Volume") {
+			continue
+		}
+		par := SoupFindParent(i, "div")
+		ret[strings.TrimSpace(i.FullText())] =
+			Skythewoodvolume(par)
+	}
+	return ret
+}
+
+func Skythewoodvolume(parent soup.Root) [][]string {
+	var ret [][]string
+	for c := parent.FindNextSibling(); c.Pointer != nil &&
+		(strings.TrimSpace(c.FullText()) == "" ||
+			c.Find("a").Pointer != nil) &&
+		c.Find("img").Pointer == nil; c = c.FindNextSibling() {
+		for _, a := range c.FindAll("a") {
+			ret = append(ret, []string{a.Attrs()["href"], strings.TrimSpace(a.FullText())})
+		}
+	}
+
+	var img string
+	for c := parent.FindPrevSibling(); c.Pointer != nil &&
+		(strings.TrimSpace(c.FullText()) == "" ||
+			c.Find("img").Pointer != nil); c = c.FindPrevSibling() {
+		if c.Find("img").Pointer == nil {
+			continue
+		}
+		img = c.Find("a").Attrs()["href"]
+	}
+	if img == "" {
+		return ret
+	}
+
+	return append([][]string{{img, "cover"}}, ret...)
+}
+
+// Return contents for chapter url URL with TITLE and chapter no. N.
+func SkythewoodChapter(url, title string, n int) ([]byte, []EpubFile) {
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+
+	ret.WriteString(EpubContentPreamble(title))
+
+	s := soup.HTMLParse(h)
+	div := s.Find("div", "class", "post-body")
+	imgCounter := 1
+	for _, c := range div.Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 {
+			var html string
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+func SkythewoodSeriesTitle(sup soup.Root) string {
+	return strings.TrimSpace(
+		sup.Find("h3", "class", "post-title").FullText())
+}
+
+// Return the files for the series TOC page URL URL.
+func SkythewoodEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+	seriesTitle := SkythewoodSeriesTitle(sup)
+
+	ret := make(map[string][]EpubFile)
+	vols := SkythewoodVolumes(sup)
+	for v, c := range vols {
+		var files []EpubFile
+		n := 1
+		for _, ch := range c {
+			fmt.Println("Fetching", v, ch[1], ch[0])
+			if ch[1] == "cover" {
+				files = AddCoverImage(ch[0], files)
+				continue
+			}
+			content, extra := SkythewoodChapter(ch[0], ch[1], n)
+			cid := "Chapter" + strconv.Itoa(n)
+			files = append(files,
+				EpubFile{
+					Title: ch[1],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: content,
+				})
+			files = append(files, extra...)
+			n++
+		}
+		ret[seriesTitle + " - " + v] = EpubAddExtra("Skythewood Translations", c[0][0], seriesTitle + " - " + v, files)
+	}
+	return ret
+}
+
 
 func main() {
 	if len(os.Args) == 1 {
@@ -2021,6 +2152,8 @@ func main() {
 			files = CClawEpubFiles(u)
 		case strings.Contains(u, "storyseedling.com"):
 			files = StorySeedlingEpubFiles(u)
+		case strings.Contains(u, "skythewood.blogspot.com"):
+			files = SkythewoodEpubFiles(u)
 		}
 
 		for uu, ef := range files {
