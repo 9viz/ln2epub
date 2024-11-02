@@ -9,6 +9,7 @@ import (
 	"github.com/anaskhan96/soup"
 	// "golang.org/x/net/proxy"
 	"io/ioutil"
+	"io"
 	"net/http"
 	nurl "net/url"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"mime/multipart"
+	"encoding/json"
 )
 
 // * Epub
@@ -319,16 +322,15 @@ var RHEADERS map[string][]string = map[string][]string{
 }
 
 // Make a GET/POST request for URL.
-func fetch(url string, postform nurl.Values) ([]byte, error) {
+func fetch(url string, body io.Reader, contenttype string) ([]byte, error) {
 	var req *http.Request
-	if postform == nil {
+	if body == nil {
 		req, _ = http.NewRequest("GET", url, nil)
 		req.Header = RHEADERS
 	} else {
-		req, _ = http.NewRequest("POST", url,
-			strings.NewReader(postform.Encode()))
+		req, _ = http.NewRequest("POST", url, body)
 		req.Header = RHEADERS
-		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Add("Content-Type", contenttype)
 	}
 
 	// proxyURL, err := nurl.Parse("socks5://127.0.0.1:9050")
@@ -344,28 +346,43 @@ func fetch(url string, postform nurl.Values) ([]byte, error) {
 	if err != nil {
 		return []byte(""), err
 	}
-	body, _ := ioutil.ReadAll(resp.Body)
+	bod, _ := ioutil.ReadAll(resp.Body)
 
-	return body, nil
+	return bod, nil
 }
 
 // Make a GET request for URL.
 // The response body and error, if any, are returned.
 func Request(url string) (string, error) {
-	b, e := fetch(url, nil)
+	b, e := fetch(url, nil, "")
 	return string(b), e
 }
 
 // Make a POST rqeuest for URL with form POSTFORM.
 func PostForm(url string, postform nurl.Values) (string, error) {
-	b, e := fetch(url, postform)
+	b, e := fetch(url, strings.NewReader(postform.Encode()), "application/x-www-form-urlencoded")
+	return string(b), e
+}
+
+// Make a POST request for URL with mutlipart FORM.
+// FORM is a list of [ FIELD, CONTENT ].
+func PostMultipartForm(url string, form [][]string) (string, error) {
+	var f bytes.Buffer
+	writer := multipart.NewWriter(&f)
+	for _, ff := range form {
+		field, _ := writer.CreateFormField(ff[0])
+		field.Write([]byte(ff[1]))
+	}
+	writer.Close()
+
+	b, e := fetch(url, &f, writer.FormDataContentType())
 	return string(b), e
 }
 
 // Fetch the image from url URL.
 // Return the image file contents, image mimetype.
 func FetchImage(url string) ([]byte, string) {
-	img, _ := fetch(url, nil)
+	img, _ := fetch(url, nil, "")
 	return img, http.DetectContentType(img)
 }
 
@@ -1902,34 +1919,68 @@ func StorySeedlingChName(title string) string {
 	if m == nil {
 		return "unknown"
 	}
-	return m[1]
+	return strings.TrimSpace(m[1])
 }
 
 func StorySeedlingSeriesTitle(sup soup.Root) string {
+	if title := sup.Find("meta", "property", "og:title"); title.Pointer != nil {
+		return title.Attrs()["content"]
+	}
 	return strings.TrimSpace(sup.Find("h1").Text())
 }
 
+var StorySeedlingTocRe = regexp.MustCompile(`toc\('([0-9]+)', '([a-zA-Z0-9]+)'\)`)
+type StorySeedlingChJson struct {
+	Success bool `json:"success"`
+	Data    []struct {
+		Title    string `json:"title"`
+		URL      string `json:"url"`
+		Slug     string `json:"slug"`
+		IsLocked bool   `json:"is_locked"`
+		IsRead   bool   `json:"is_read"`
+		Price    string `json:"price"`
+		Bought   bool   `json:"bought"`
+		Date     string `json:"date"`
+	} `json:"data"`
+}
 // Return a list of [ URL, CHAPTERNAME ] for TOC soup SUP with URL.
 func StorySeedlingVolumes(url string, sup soup.Root) map[string][][]string {
 	ret := make(map[string][][]string)
 
 	vol := ""
 
-	for _, a := range sup.FindAll("a") {
-		href := a.Attrs()["href"]
-		if !strings.HasPrefix(href, url) {
+	toc := ""
+	for _, div := range sup.FindAll("div") {
+		if x, ok := div.Attrs()["x-data"]; ok && strings.HasPrefix(x, "toc(") {
+			toc = x
+			break
+		}
+	}
+	match := StorySeedlingTocRe.FindStringSubmatch(toc)
+	js, err := PostMultipartForm("https://storyseedling.com/ajax",
+		[][]string{
+			{"post", match[2]},
+			{"id", match[1]},
+			{"action", "series_toc"}})
+	if err != nil {
+		panic(err)
+	}
+	var j StorySeedlingChJson
+	err = json.Unmarshal([]byte(js), &j)
+	if ! j.Success {
+		return ret
+	}
+
+	for _, ch := range j.Data {
+		if ch.IsLocked {
 			continue
 		}
-		text := a.Find("div", "class", "truncate")
-		if text.Pointer == nil {
-			continue
-		}
-		t := strings.TrimSpace(text.Text())
+		t := strings.TrimSpace(ch.Title)
 		if strings.HasPrefix(t, "Vol.") {
 			vol = StorySeedlingVolNo(t)
 		}
-		ch := StorySeedlingChName(t)
-		ret[vol] = append([][]string{{href,ch}}, ret[vol]...)
+		cn := StorySeedlingChName(t)
+		ret[vol] = append(ret[vol], []string{ch.URL,cn})
 	}
 
 	return ret
