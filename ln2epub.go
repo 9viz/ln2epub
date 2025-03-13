@@ -318,7 +318,7 @@ func EpubAddExtra(author, identifier, title string, files []EpubFile) []EpubFile
 
 // Headers to use when making HTTP requests.
 var RHEADERS map[string][]string = map[string][]string{
-	"User-Agent": {"Chrome/96.0.4664.110"},
+	"User-Agent": {"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"},
 }
 
 // Make a GET/POST request for URL.
@@ -1986,6 +1986,7 @@ func StorySeedlingVolumes(url string, sup soup.Root) map[string][][]string {
 	return ret
 }
 
+// TODO: Try to retrieve the JSON here too.
 // Return content for chapter URL with TITLE and chapter no. N.
 func StorySeedlingChapter(url, title string, n int) ([]byte, []EpubFile) {
 	var ret bytes.Buffer
@@ -2169,6 +2170,113 @@ func SkythewoodEpubFiles(url string) map[string][]EpubFile {
 	return ret
 }
 
+// * Yuki Kitsuneko
+// Title div:class=entry-content -> h3:class=text-info
+
+// Return map of Volume -> [ URL, TITLE ] for the series.
+func YukiKitsuVolumes(sup soup.Root) map[string][][]string {
+	ret := make(map[string][][]string)
+
+	div := sup.Find("div", "class", "entry-content")
+
+	parent := false
+	divs := div.FindAll("h4", "class", "mt-1")
+
+	if len(divs) > 1 && strings.HasPrefix(divs[1].Text(), "Volume") {
+		parent = true
+		divs = divs[1:]
+	} else {
+		divs = []soup.Root{
+			div,
+		}
+	}
+
+	for _, h4 := range divs {
+		volTitle := ""
+		var r [][]string
+		if parent {
+			volTitle = h4.Text()
+			h4 = SoupFindParent(h4, "div")
+		}
+		for _, a := range h4.FindAll("a", "class", "text-info") {
+			r = append(r, []string{a.Attrs()["href"],a.Text()})
+		}
+		ret[volTitle] = r
+	}
+
+	return ret
+}
+
+func YukiKitsuChapter(url, title string, n int) ([]byte, []EpubFile) {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	var ret bytes.Buffer
+	var extra []EpubFile
+
+	ret.WriteString(EpubContentPreamble(title))
+	imgCounter := 1
+	for _, c := range sup.Find("div", "class", "entry-content").Children() {
+		if imgs := c.FindAll("img"); len(imgs) != 0 || SoupTag(c) == "img" {
+			var html string
+			if SoupTag(c) == "img" {
+				imgs = []soup.Root{c}
+			}
+			html, imgCounter, extra = ReplaceImgTags(
+				c.HTML(), imgs, imgCounter, n, extra)
+			ret.WriteString(html)
+		} else if SoupTag(c) == "script" {
+			break
+		} else {
+			ret.WriteString(c.HTML())
+		}
+	}
+	ret.WriteString(EpubContentEnd())
+
+	return ret.Bytes(), extra
+}
+
+func YukiKitsuSeriesTitle(sup soup.Root) string {
+	return strings.TrimSpace(
+		sup.Find("div", "class", "entry-content").Find(
+			"h1", "class", "text-info").Text())
+}
+
+func YukiKitsuEpubFiles(url string) map[string][]EpubFile {
+	h, err := Request(url)
+	if err != nil {
+		panic(err)
+	}
+	sup := soup.HTMLParse(h)
+
+	seriesTitle := YukiKitsuSeriesTitle(sup)
+	vols := YukiKitsuVolumes(sup)
+	ret := make(map[string][]EpubFile)
+	for v, c := range vols {
+		var files []EpubFile
+		n := 1
+		for _, ch := range c {
+			fmt.Println("Fetching", v, ch[1], ch[0])
+			content, extra := YukiKitsuChapter(ch[0], ch[1], n)
+			cid := "Chapter" + strconv.Itoa(n)
+			files = append(files,
+				EpubFile{
+					Title: ch[1],
+					Id: cid,
+					Filename: "OEBPS/Text/" + cid + ".xhtml",
+					Mimetype: "application/xhtml+xml",
+					Content: content,
+				})
+			files = append(files, extra...)
+			n++
+		}
+		ret[seriesTitle + " - " + v] = EpubAddExtra("Yuki KitsuNeko Translations", c[0][0], seriesTitle + " - " + v, files)
+	}
+	return ret
+}
 
 func main() {
 	if len(os.Args) == 1 {
@@ -2205,6 +2313,8 @@ func main() {
 			files = StorySeedlingEpubFiles(u)
 		case strings.Contains(u, "skythewood.blogspot.com"):
 			files = SkythewoodEpubFiles(u)
+		case strings.Contains(u, "yukikitsuneko.blogspot.com"):
+			files = YukiKitsuEpubFiles(u)
 		}
 
 		for uu, ef := range files {
